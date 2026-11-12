@@ -1,0 +1,10 @@
+# 書籍の内容・注釈データはリポジトリに含めない(公開リポジトリ前提)
+*.pdf
+*.PDF
+samples/
+annotations/
+exports/
+*.annot.json
+node_modules/
+.env
+.env.*
