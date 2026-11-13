@@ -12,7 +12,7 @@ import {
   rectToMargins,
   type Margins,
 } from './model/crop';
-import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown } from './model/layout';
+import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown, type ViewSpec } from './model/layout';
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapAction } from './model/tap';
@@ -29,7 +29,9 @@ import {
 } from './offline/library';
 import { countUnsynced, incomingChanges, mergeDocuments, positionPending, type Incoming } from './sync/merge';
 import { isSyncable, syncBook } from './sync/remote';
+import { createAnnotator } from './ui/annotate';
 import { createNav } from './ui/nav';
+import { exportNotes } from './export/exporter';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
 import {
@@ -73,6 +75,11 @@ let index = 0;
 let view: ViewState = { ...RESET_VIEW };
 let fit: Size = { w: 1, h: 1 };
 let cropping = false;
+/** いま表示している範囲と、PDFページ全体の大きさ(注釈の座標変換に使う) */
+let shownSpec: ViewSpec | null = null;
+let pageSize: Size = { w: 1, h: 1 };
+/** 開いている本の名前(書き出しのフォルダ名に使う) */
+let bookName = '';
 /** 前回の同期で確定した内容。未同期の件数を求める基準 */
 let base: BookSyncDocument | null = null;
 let syncing = false;
@@ -216,6 +223,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   doc = loadBookDocument(bookId);
   base = loadBase(bookId);
   syncError = null;
+  bookName = name;
   $('title').textContent = name;
   // 接続中なら、描画の前に同期して、他端末の最後に読んだ位置・設定・しおりを反映する(G-2)。
   // 通信が遅くても開くのを待たせない(5秒で打ち切り、同期はそのまま続ける)
@@ -237,6 +245,8 @@ function closeBook(): void {
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
+  annot.reset();
+  readerEl.classList.remove('annotating');
   if (cropping) exitCrop(false);
   void viewer.close();
   doc = null;
@@ -272,6 +282,7 @@ function applyView(): void {
   view = clampState(hostBox(), fit, view);
   const l = layout(hostBox(), fit, view);
   viewer.setTransform(l.tx, l.ty, l.scale);
+  annot.setZoom(view.z);
 }
 
 async function renderCurrent(): Promise<void> {
@@ -284,9 +295,12 @@ async function renderCurrent(): Promise<void> {
   try {
     const result = await viewer.show(shown.spec);
     if (!result) return;
-    fit = result;
+    fit = result.fit;
+    pageSize = result.page;
+    shownSpec = shown.spec;
     applyView();
     updateCropOverlay();
+    annot.render();
     if (!cropping) {
       const double = isDouble();
       const around = [nextIndex(pages, index, double), prevIndex(pages, index, double)]
@@ -479,6 +493,7 @@ function applyMerged(bookId: string, result: BookSyncDocument): Incoming {
     if (pages.length > 0) rebuildPages();
   }
   nav.refresh();
+  annot.render();
   return incoming;
 }
 
@@ -581,9 +596,40 @@ const nav = createNav({
   },
 });
 
+// ---------- 注釈(蛍光ペン・位置つきメモ) ----------
+
+const annot = createAnnotator(
+  {
+    getDoc: () => doc,
+    getGeom: () => (doc && shownSpec ? { spec: shownSpec, fit, page: pageSize, box: hostBox(), view } : null),
+    prev: () => goPrev(),
+    next: () => goNext(),
+    commit: () => {
+      if (!doc) return;
+      saveBookDocument(doc);
+      markDirty();
+    },
+    onModeChange: (active) => {
+      readerEl.classList.toggle('annotating', active);
+      if (active) {
+        setMenuVisible(false);
+        readerEl.style.setProperty('--panel-h', `${$('ann-bar').offsetHeight}px`);
+      } else {
+        readerEl.style.removeProperty('--panel-h');
+      }
+      void renderCurrent(); // 表示領域の大きさが変わるので、フィットし直す
+    },
+  },
+  viewer.pageEl,
+);
+$('open-ann').addEventListener('click', () => {
+  if (!cropping) annot.enter();
+});
+
 // ---------- 操作: タップ / スワイプ / ピンチ / ホイール / キー ----------
 
 attachGestures(stageEl, {
+  ...annot.draw, // 描画ツールの使用中は、タップによるページ送りを行わない(O-4)
   isZoomed: () => isZoomed(view),
   isCenter: (xf) => !doc || tapAction(xf, doc.settings.openDirection) === 'menu',
   onEdgeTap: (xf) => {
@@ -625,9 +671,11 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') nav.close();
     return;
   }
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+  if (annot.isEditorOpen()) return; // メモの入力中。文字入力を妨げない
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
   if (e.key === 'Escape') {
     if (cropping) exitCrop(true);
+    else if (annot.isActive()) annot.exit();
     else setMenuVisible(false);
     return;
   }
@@ -748,6 +796,36 @@ $('sync-now').addEventListener('click', () => {
   if (!auth.currentToken()) void onReconnect();
   else void syncNow();
 });
+// 注釈の書き出し(A-4, A-5): 注釈つきの画像とMarkdownを、ドライブの通常フォルダへ保存する
+const exportBtn = $<HTMLButtonElement>('export-notes');
+const exportStatus = $('export-status');
+const exportLink = $<HTMLAnchorElement>('export-link');
+exportBtn.addEventListener('click', async () => {
+  if (!doc) return;
+  exportLink.hidden = true;
+  const token = auth.currentToken();
+  if (!token) {
+    exportStatus.textContent = 'ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。';
+    return;
+  }
+  exportBtn.disabled = true;
+  try {
+    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress: (m) => (exportStatus.textContent = m) });
+    exportStatus.textContent = `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)`;
+    exportLink.href = r.folderUrl;
+    exportLink.hidden = false;
+  } catch (e) {
+    if (e instanceof AuthExpiredError) {
+      auth.expire();
+      exportStatus.textContent = '接続が切れました。再接続してから、もう一度お試しください。';
+    } else {
+      exportStatus.textContent = (e as Error).message;
+    }
+  } finally {
+    exportBtn.disabled = false;
+  }
+});
+
 const autoReconnectChk = $<HTMLInputElement>('set-autoreconnect');
 autoReconnectChk.checked = autoReconnectEnabled();
 autoReconnectChk.addEventListener('change', () => {
@@ -818,6 +896,7 @@ function updateCropOverlay(): void {
 async function enterCrop(): Promise<void> {
   const page = pages[index];
   if (!doc || !page) return;
+  annot.exit();
   settingsEl.hidden = true;
   setMenuVisible(false);
   cropping = true;

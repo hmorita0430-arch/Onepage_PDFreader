@@ -52,6 +52,7 @@
           <span id="conn-reader">未接続</span>
           <button id="reconnect-reader" class="link" type="button" hidden>再接続</button>
         </span>
+        <button id="open-ann" class="icon" type="button" aria-label="注釈(蛍光ペン・メモ)">✎</button>
         <button id="open-nav" class="icon" type="button" aria-label="ページ移動・しおり・サムネイル">☰</button>
         <button id="open-settings" class="icon" type="button" aria-label="本の設定">⚙</button>
       </header>
@@ -101,6 +102,13 @@
           <label class="inline">通し番号 <input id="set-serial" type="number" min="1" inputmode="numeric" /></label>
           <label class="inline">= 印刷p. <input id="set-printed" type="number" inputmode="numeric" /></label>
           <button id="clear-printed" class="link" type="button">対応を消す</button>
+        </fieldset>
+        <fieldset>
+          <legend>注釈の書き出し</legend>
+          <p class="muted">蛍光ペン・メモを、注釈つきの画像とMarkdownにして、ドライブの「読書ノート」フォルダへ保存します。</p>
+          <button id="export-notes" class="secondary" type="button">ドライブに書き出す</button>
+          <p id="export-status" class="muted" role="status"></p>
+          <a id="export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
         </fieldset>
         <fieldset>
           <legend>ドライブとの同期</legend>
@@ -159,6 +167,38 @@
           <div id="thumb-grid" class="thumb-grid"></div>
         </div>
       </section>
+      <section id="ann-bar" class="ann-bar" hidden aria-label="注釈ツール">
+        <div class="ann-row">
+          <button id="ann-prev" type="button" aria-label="前のページ">◀</button>
+          <button type="button" data-tool="rect" aria-pressed="true">四角</button>
+          <button type="button" data-tool="stroke" aria-pressed="false">なぞる</button>
+          <button type="button" data-tool="memo" aria-pressed="false">メモ</button>
+          <button type="button" data-tool="erase" aria-pressed="false">消す</button>
+          <button id="ann-next" type="button" aria-label="次のページ">▶</button>
+        </div>
+        <div class="ann-row">
+          <span class="ann-colors" role="group" aria-label="色">
+            <button type="button" data-color="yellow" aria-label="黄" aria-pressed="true"></button>
+            <button type="button" data-color="green" aria-label="緑" aria-pressed="false"></button>
+            <button type="button" data-color="pink" aria-label="ピンク" aria-pressed="false"></button>
+            <button type="button" data-color="blue" aria-label="青" aria-pressed="false"></button>
+          </span>
+          <button id="ann-done" class="done" type="button">完了</button>
+        </div>
+        <p id="ann-hint" class="muted"></p>
+      </section>
+
+      <div id="memo-editor" class="memo-editor" hidden role="dialog" aria-modal="true" aria-label="メモ">
+        <div class="memo-card">
+          <textarea id="memo-text" maxlength="2000" rows="6" placeholder="メモ(Ctrl+Enterで保存)"></textarea>
+          <div class="memo-actions">
+            <button id="memo-save" class="primary" type="button">保存</button>
+            <button id="memo-delete" class="danger" type="button">削除</button>
+            <button id="memo-cancel" class="secondary" type="button">閉じる</button>
+          </div>
+        </div>
+      </div>
+
       <section id="crop-panel" class="crop-panel" hidden aria-label="余白の設定">
         <h2>余白の設定 <small>(表示中のページで確認しながら)</small></h2>
         <div class="crop-grid">

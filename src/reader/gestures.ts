@@ -7,8 +7,16 @@
  * - ズーム中のドラッグ: 表示位置の移動のみ。スワイプでのページ送りは行わない。
  * - ズームしていないときの横スワイプ: ページ送り。
  * - ピンチ、マウスホイール: ズーム。
+ * - 注釈の描画ツールを使用中(drawActive)は、1本指(マウスの左ボタン)の操作を描画として通知し、
+ *   タップによるページ送り・スワイプは行わない(O-4)。2本指のピンチ・移動、Shift+ドラッグでの移動は使える。
  */
 export interface GestureHandlers {
+  /** 描画ツールの使用中か */
+  drawActive?(): boolean;
+  onDrawStart?(x: number, y: number): void;
+  onDrawMove?(x: number, y: number): void;
+  /** cancelled: 2本目の指が触れた等で、描画を中止した */
+  onDrawEnd?(x: number, y: number, cancelled: boolean): void;
   isZoomed(): boolean;
   isCenter(xFraction: number): boolean;
   onEdgeTap(xFraction: number): void;
@@ -34,6 +42,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   let pinchMid = { x: 0, y: 0 };
   let lastCenterTap: { t: number; x: number; y: number } | null = null;
   let pending: ReturnType<typeof setTimeout> | undefined;
+  let drawing = false;
 
   const rel = (e: { clientX: number; clientY: number }) => {
     const r = el.getBoundingClientRect();
@@ -75,7 +84,18 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
       gesture = { sx: e.clientX, sy: e.clientY, st: performance.now(), moved: false, multi: false };
+      // 描画ツール中は、1本指の操作を描画にする(Shift を押している間は、ズーム中の移動に使う)
+      if (h.drawActive?.() && !e.shiftKey) {
+        drawing = true;
+        const p = rel(e);
+        h.onDrawStart?.(p.x, p.y);
+      }
     } else if (gesture) {
+      if (drawing) {
+        drawing = false;
+        const p = rel(e);
+        h.onDrawEnd?.(p.x, p.y, true); // 2本目の指: 描画を中止してピンチ操作に切り替える
+      }
       gesture.multi = true;
       const t = two();
       pinchDist = t.dist;
@@ -98,6 +118,11 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       return;
     }
     if (gesture.multi) return;
+    if (drawing) {
+      const p = rel(e);
+      h.onDrawMove?.(p.x, p.y);
+      return;
+    }
     if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > TAP_MAX_MOVE) gesture.moved = true;
     if (gesture.moved && h.isZoomed()) h.onPan(e.clientX - prev.x, e.clientY - prev.y);
   });
@@ -108,6 +133,12 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     if (pts.size > 0 || !gesture) return;
     const g = gesture;
     gesture = null;
+    if (drawing) {
+      drawing = false;
+      const p = rel(e);
+      h.onDrawEnd?.(p.x, p.y, cancelled);
+      return;
+    }
     if (cancelled || g.multi) return;
     const dx = e.clientX - g.sx;
     const dy = e.clientY - g.sy;

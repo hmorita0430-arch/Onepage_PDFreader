@@ -1,6 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist';
 import type { ViewSpec } from '../model/layout';
+import type { NormRect } from '../model/types';
 import type { Size } from './view';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
@@ -16,6 +17,8 @@ interface Rendered {
   canvas: HTMLCanvasElement;
   /** フィット表示したときのCSSサイズ */
   fit: Size;
+  /** PDFページ(見開き1枚)全体の大きさ(PDFの単位)。注釈の座標を、拡大しても歪まない単位に直すために使う */
+  page: Size;
 }
 
 /**
@@ -62,8 +65,8 @@ export class PageViewer {
     this.pdf = undefined;
   }
 
-  /** 指定範囲をフィット表示する。成功時はフィット時のサイズ、追い越された場合は null。 */
-  async show(spec: ViewSpec): Promise<Size | null> {
+  /** 指定範囲をフィット表示する。成功時はフィット時のサイズとページの大きさ、追い越された場合は null。 */
+  async show(spec: ViewSpec): Promise<{ fit: Size; page: Size } | null> {
     const token = ++this.showToken;
     this.current?.cancel();
     const r = await this.render(spec, token);
@@ -73,7 +76,7 @@ export class PageViewer {
     this.pageEl.prepend(r.canvas);
     this.pageEl.style.width = `${r.fit.w}px`;
     this.pageEl.style.height = `${r.fit.h}px`;
-    return r.fit;
+    return { fit: r.fit, page: r.page };
   }
 
   setTransform(tx: number, ty: number, scale: number): void {
@@ -85,6 +88,61 @@ export class PageViewer {
     for (const spec of specs) {
       if (!this.pdf) return;
       await this.render(spec, null).catch(() => undefined);
+    }
+  }
+
+  /** 書き出し用: 指定範囲を、長辺が maxSide ピクセルになる大きさで描いたキャンバスを返す。 */
+  async renderToCanvas(spec: ViewSpec, maxSide: number): Promise<{ canvas: HTMLCanvasElement; page: Size } | null> {
+    const pdf = this.pdf;
+    if (!pdf) return null;
+    const { region } = spec;
+    const page = await pdf.getPage(spec.pdfPage);
+    try {
+      const base = page.getViewport({ scale: 1 });
+      const rw = base.width * region.w;
+      const rh = base.height * region.h;
+      let scale = maxSide / Math.max(rw, rh);
+      scale = Math.min(scale, Math.sqrt(MAX_PIXELS / (rw * rh)));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(viewport.width * region.w));
+      canvas.height = Math.max(1, Math.round(viewport.height * region.h));
+      await page.render({
+        canvas,
+        viewport,
+        background: '#ffffff',
+        transform: [1, 0, 0, 1, -viewport.width * region.x, -viewport.height * region.y],
+      }).promise;
+      return { canvas, page: { w: base.width, h: base.height } };
+    } finally {
+      page.cleanup();
+    }
+  }
+
+  /**
+   * 指定した範囲(元画像基準の正規化)に含まれる、PDFの文字データ(OCR等)を返す。範囲ごとに1件。
+   * ページに文字データが無ければ、すべて null。文字の並びはPDF内の順(縦書きでも内容順)。
+   */
+  async textInRegions(pdfPage: number, regions: NormRect[]): Promise<(string | null)[]> {
+    const pdf = this.pdf;
+    if (!pdf) return regions.map(() => null);
+    const page = await pdf.getPage(pdfPage);
+    try {
+      const content = await page.getTextContent();
+      const vp = page.getViewport({ scale: 1 });
+      const items = content.items.flatMap((it) => {
+        if (!('str' in it) || it.str.trim() === '') return [];
+        const [x0, y0] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+        const [x1, y1] = vp.convertToViewportPoint(it.transform[4] + it.width, it.transform[5] + it.height);
+        return [{ str: it.str, cx: (x0 + x1) / 2 / vp.width, cy: (y0 + y1) / 2 / vp.height }];
+      });
+      if (items.length === 0) return regions.map(() => null);
+      return regions.map((r) => {
+        const inside = items.filter((i) => i.cx >= r.x && i.cx <= r.x + r.w && i.cy >= r.y && i.cy <= r.y + r.h);
+        return inside.length === 0 ? null : inside.map((i) => i.str).join('');
+      });
+    } finally {
+      page.cleanup();
     }
   }
 
@@ -166,7 +224,7 @@ export class PageViewer {
       page.cleanup();
     }
 
-    const rendered: Rendered = { canvas, fit };
+    const rendered: Rendered = { canvas, fit, page: { w: base.width, h: base.height } };
     this.cache.set(key, rendered);
     while (this.cache.size > CACHE_SIZE) {
       const oldest = this.cache.keys().next().value;
