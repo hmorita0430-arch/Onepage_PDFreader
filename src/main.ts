@@ -223,6 +223,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
     await Promise.race([syncNow(), new Promise<void>((r) => setTimeout(r, 5000))]);
   }
   renderSyncStatus();
+  positionDirty = !doc.position; // 初めて開く本だけ、開いた位置を保存する。それ以外は、移動するまで保存しない
   syncSettingsForm();
   pages = buildPageList(viewer.numPages, doc.settings);
   index = doc.position ? findIndex(pages, doc.position.page) : 0; // N-1: 最後に読んだ位置から開く
@@ -307,6 +308,7 @@ function go(target: number): void {
   const next = normalizeIndex(pages, clampIndex(pages, target), isDouble());
   if (next === index) return;
   index = next;
+  positionDirty = true; // 利用者が移動した。この位置を「最後に読んだ位置」として保存する
   // ズーム維持でなければ、ページを送るたびにフィット表示へ戻る(D-9)
   if (!doc.settings.zoomKeep) view = { ...RESET_VIEW };
   void renderCurrent();
@@ -324,6 +326,13 @@ function setMenuVisible(visible: boolean): void {
 // ---------- 最後に読んだ位置(N-1) ----------
 
 let positionTimer: ReturnType<typeof setTimeout> | undefined;
+/**
+ * 利用者がページを移動した(まだ保存していない)。
+ * 位置の更新日時は「新しい方が勝つ」ため、移動していないのに「いま」の時刻で保存し直してはいけない。
+ * (画面サイズの変化・画面を隠す・閉じるたびに保存し直すと、動いていない端末の古い位置が、
+ *  他の端末の新しい位置に勝ってしまう)
+ */
+let positionDirty = false;
 
 function schedulePositionSave(): void {
   clearTimeout(positionTimer);
@@ -333,7 +342,8 @@ function schedulePositionSave(): void {
 function flushPosition(): void {
   clearTimeout(positionTimer);
   const page = pages[index];
-  if (!doc || !page || cropping) return;
+  if (!doc || !page || cropping || !positionDirty) return;
+  positionDirty = false;
   doc.position = { page: page.ref, updatedAt: Date.now() };
   saveBookDocument(doc);
   markDirty();
@@ -979,7 +989,24 @@ if (import.meta.env.DEV) {
   });
 }
 
+$('version').textContent = `バージョン ${__APP_VERSION__}`;
+$('version-reader').textContent = `バージョン ${__APP_VERSION__}`;
+$('update-reload').addEventListener('click', () => location.reload());
+
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   // アプリ本体をオフラインで起動できるようにする(G-4)。書籍データは含まない。
-  navigator.serviceWorker.register('./sw.js').catch(() => undefined);
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  // 新しい版が配信されたら、開いている画面は古いままなので、更新を促す(初回の導入時は出さない)
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController) $('update-banner').hidden = false;
+  });
+  navigator.serviceWorker
+    .register('./sw.js')
+    .then((reg) => {
+      // 開きっぱなしのアプリでも、画面に戻ったときに新しい版を確認する
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') void reg.update().catch(() => undefined);
+      });
+    })
+    .catch(() => undefined);
 }

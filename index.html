@@ -9,6 +9,11 @@
     <title>見開きリーダー</title>
   </head>
   <body>
+    <div id="update-banner" class="update-banner" hidden role="status">
+      新しい版があります
+      <button id="update-reload" type="button">更新</button>
+    </div>
+
     <main id="start" class="screen">
       <h1>見開きリーダー</h1>
       <p class="lead">見開きで撮影したPDFを、1ページずつ読みやすく表示します。</p>
@@ -21,6 +26,8 @@
         <div id="progress-bar"></div>
       </div>
       <p id="message" class="message" role="status"></p>
+
+      <p id="version" class="muted"></p>
 
       <section class="library" aria-labelledby="library-title">
         <h2 id="library-title">端末に保存した本</h2>
@@ -105,6 +112,7 @@
           </label>
           <button id="disconnect" class="link" type="button">この端末の接続情報を消す</button>
         </fieldset>
+        <p id="version-reader" class="muted"></p>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
       <section id="nav" class="nav" hidden aria-label="ページ移動">

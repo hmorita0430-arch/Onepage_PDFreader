@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -23,10 +24,22 @@ function emitServiceWorker(): Plugin {
   };
 }
 
+/** 画面に出す版。配信ではコミットID、手元ではgitから。取れなければ 'dev'。 */
+function appVersion(): string {
+  const fromCi = process.env.GITHUB_SHA?.slice(0, 7);
+  if (fromCi) return fromCi;
+  try {
+    return execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'dev';
+  } catch {
+    return 'dev';
+  }
+}
+
 // GitHub Pages のサブパス配信でも動くよう、相対パスでビルドする。
 export default defineConfig({
   base: './',
   plugins: [emitServiceWorker()],
+  define: { __APP_VERSION__: JSON.stringify(appVersion()) },
   build: { target: 'es2022' },
   test: { include: ['tests/**/*.test.ts'] },
 });

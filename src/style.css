@@ -208,3 +208,10 @@ button.icon {
 .sync-hint span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sync-hint button { min-height: 44px; min-width: 44px; border-radius: 22px; border: none; background: none; color: var(--accent); font: inherit; padding: 0 10px; }
 .reader.cropping .sync-hint { display: none; }
+
+.update-banner {
+  position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 20;
+  display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 16px; border-radius: 22px;
+  background: var(--accent); color: #10131a; font-size: 0.9rem; font-weight: 600;
+}
+.update-banner button { min-height: 44px; min-width: 64px; border-radius: 22px; border: none; background: #10131a; color: var(--text); font: inherit; }
