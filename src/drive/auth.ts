@@ -4,10 +4,10 @@ import { loadScript } from './loadScript';
 /**
  * Google Identity Services のトークン方式。リフレッシュトークンは使わない。
  * アクセストークンは約1時間で切れ、再取得には利用者の操作(ボタン)が必要(要件 G-3)。
- * 第1段階の権限は drive.file のみ(ピッカーで選んだPDFの読み取り)。
- * drive.appdata は同期を実装する第3段階で追加する。
+ * 権限は2つだけ: drive.file(ピッカーで選んだPDFの読み取り・出力フォルダへの書き込み)と、
+ * drive.appdata(しおり・設定などの同期データ。アプリ専用領域)。
  */
-const SCOPE = 'https://www.googleapis.com/auth/drive.file';
+const SCOPE = 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata';
 
 export type ConnectionState = 'disconnected' | 'connected' | 'expired';
 
@@ -24,6 +24,11 @@ export class DriveAuth {
   get state(): ConnectionState {
     if (this.token) return 'connected';
     return this.everConnected ? 'expired' : 'disconnected';
+  }
+
+  /** 有効なアクセストークン。切れている/未接続なら null(同期は保留する) */
+  currentToken(): string | null {
+    return this.token;
   }
 
   onChange(fn: Listener): () => void {

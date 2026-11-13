@@ -27,3 +27,26 @@ export function saveBookDocument(doc: BookSyncDocument): void {
     /* 保存不可でも続行 */
   }
 }
+
+/**
+ * 前回の同期で確定した内容(基準)。「未同期の件数」を、手元との差から求めるために持つ。
+ */
+const baseKey = (bookId: string) => `bookbase:v${SCHEMA_VERSION}:${bookId}`;
+
+export function loadBase(bookId: string): BookSyncDocument | null {
+  try {
+    const raw = localStorage.getItem(baseKey(bookId));
+    if (raw) return JSON.parse(raw) as BookSyncDocument;
+  } catch {
+    /* 壊れていれば基準なし(全項目が未同期扱いになり、次の同期で解消する) */
+  }
+  return null;
+}
+
+export function saveBase(doc: BookSyncDocument): void {
+  try {
+    localStorage.setItem(baseKey(doc.bookId), JSON.stringify(doc));
+  } catch {
+    /* 保存不可でも続行 */
+  }
+}

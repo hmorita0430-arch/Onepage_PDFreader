@@ -88,6 +88,35 @@ export class PageViewer {
     }
   }
 
+  /** サムネイル用の小さな画像(JPEG)を作り、オブジェクトURLで返す。呼び出し側が revoke する。 */
+  async renderThumbnail(spec: ViewSpec, maxW: number, maxH: number): Promise<string | null> {
+    const pdf = this.pdf;
+    if (!pdf) return null;
+    const { region } = spec;
+    const page = await pdf.getPage(spec.pdfPage);
+    try {
+      const base = page.getViewport({ scale: 1 });
+      const rw = base.width * region.w;
+      const rh = base.height * region.h;
+      const scale = Math.min(maxW / rw, maxH / rh);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(viewport.width * region.w));
+      canvas.height = Math.max(1, Math.round(viewport.height * region.h));
+      await page.render({
+        canvas,
+        viewport,
+        background: '#ffffff',
+        transform: [1, 0, 0, 1, -viewport.width * region.x, -viewport.height * region.y],
+      }).promise;
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.72));
+      canvas.width = 0; // メモリを早めに手放す
+      return blob ? URL.createObjectURL(blob) : null;
+    } finally {
+      page.cleanup();
+    }
+  }
+
   private async render(spec: ViewSpec, token: number | null): Promise<Rendered | null> {
     const pdf = this.pdf;
     if (!pdf) return null;

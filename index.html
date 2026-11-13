@@ -45,8 +45,11 @@
           <span id="conn-reader">未接続</span>
           <button id="reconnect-reader" class="link" type="button" hidden>再接続</button>
         </span>
+        <button id="open-nav" class="icon" type="button" aria-label="ページ移動・しおり・サムネイル">☰</button>
         <button id="open-settings" class="icon" type="button" aria-label="本の設定">⚙</button>
       </header>
+
+      <div id="sync-badge" class="sync-badge" role="status" aria-live="polite"></div>
 
       <footer id="bottombar" class="bar bottom" hidden>
         <span id="page-label"></span>
@@ -87,8 +90,57 @@
           <label class="inline">= 印刷p. <input id="set-printed" type="number" inputmode="numeric" /></label>
           <button id="clear-printed" class="link" type="button">対応を消す</button>
         </fieldset>
+        <fieldset>
+          <legend>ドライブとの同期</legend>
+          <p id="sync-status-text" class="muted"></p>
+          <button id="sync-now" class="secondary" type="button">今すぐ同期</button>
+        </fieldset>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
+      <section id="nav" class="nav" hidden aria-label="ページ移動">
+        <header class="nav-head">
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" data-tab="jump" aria-selected="true">移動</button>
+            <button type="button" role="tab" data-tab="named" aria-selected="false">しおり・目次</button>
+            <button type="button" role="tab" data-tab="thumbs" aria-selected="false">サムネイル</button>
+          </div>
+          <button id="nav-close" class="icon" type="button" aria-label="閉じる">✕</button>
+        </header>
+
+        <div id="nav-jump" class="nav-body">
+          <p id="jump-now" class="muted"></p>
+          <div class="jump-row">
+            <select id="jump-mode" aria-label="番号の種類">
+              <option value="serial">通し番号</option>
+              <option value="printed">印刷ページ番号</option>
+            </select>
+            <input id="jump-input" type="number" min="1" inputmode="numeric" placeholder="番号" aria-label="移動先の番号" />
+            <button id="jump-go" class="primary" type="button">移動</button>
+          </div>
+          <p id="jump-msg" class="message" role="status"></p>
+          <p class="muted">印刷ページ番号は、本の設定の「印刷ページ番号との対応」を入れると選べます。</p>
+        </div>
+
+        <div id="nav-named" class="nav-body" hidden>
+          <div class="named-form">
+            <select id="named-kind" aria-label="種類">
+              <option value="bookmark">しおり</option>
+              <option value="toc">目次</option>
+            </select>
+            <input id="named-title" type="text" placeholder="名前(例: 第3章)" maxlength="80" aria-label="名前" />
+            <button id="named-add" class="primary" type="button">いまのページを追加</button>
+          </div>
+          <p id="named-msg" class="message" role="status"></p>
+          <h3>しおり</h3>
+          <ul id="named-bookmarks" class="named-list"></ul>
+          <h3>目次</h3>
+          <ul id="named-toc" class="named-list"></ul>
+        </div>
+
+        <div id="nav-thumbs" class="nav-body thumbs" hidden>
+          <div id="thumb-grid" class="thumb-grid"></div>
+        </div>
+      </section>
       <section id="crop-panel" class="crop-panel" hidden aria-label="余白の設定">
         <h2>余白の設定 <small>(表示中のページで確認しながら)</small></h2>
         <div class="crop-grid">

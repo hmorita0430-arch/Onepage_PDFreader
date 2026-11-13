@@ -14,7 +14,7 @@ import {
 } from './model/crop';
 import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown } from './model/layout';
 import { buildPageList, clampIndex, findIndex, regionOf, type LogicalPage } from './model/pages';
-import { loadBookDocument, saveBookDocument } from './model/storage';
+import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapAction } from './model/tap';
 import type { BookSettings, BookSyncDocument, PageOverride } from './model/types';
 import {
@@ -27,6 +27,9 @@ import {
   storageInfo,
   touchBook,
 } from './offline/library';
+import { countUnsynced, mergeDocuments } from './sync/merge';
+import { isSyncable, syncBook } from './sync/remote';
+import { createNav } from './ui/nav';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
 import {
@@ -70,6 +73,12 @@ let index = 0;
 let view: ViewState = { ...RESET_VIEW };
 let fit: Size = { w: 1, h: 1 };
 let cropping = false;
+/** 前回の同期で確定した内容。未同期の件数を求める基準 */
+let base: BookSyncDocument | null = null;
+let syncing = false;
+let syncAgain = false;
+let syncError: string | null = null;
+let syncTimer: ReturnType<typeof setTimeout> | undefined;
 
 // ---------- 接続状態(G-3: 切れても読書は止めない) ----------
 
@@ -88,6 +97,10 @@ function renderConnection(state: ConnectionState): void {
   for (const id of ['reconnect-start', 'reconnect-reader']) $(id).hidden = state !== 'expired';
 }
 auth.onChange(renderConnection);
+auth.onChange((state) => {
+  renderSyncStatus();
+  if (state === 'connected') void syncNow(); // 再接続したら、保留していた同期を再開する
+});
 renderConnection(auth.state);
 
 async function onReconnect(): Promise<void> {
@@ -195,7 +208,15 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
     throw new Error(`PDFを開けませんでした: ${(e as Error).message}`);
   }
   doc = loadBookDocument(bookId);
+  base = loadBase(bookId);
+  syncError = null;
   $('title').textContent = name;
+  // 接続中なら、描画の前に同期して、他端末の最後に読んだ位置・設定・しおりを反映する(G-2)。
+  // 通信が遅くても開くのを待たせない(5秒で打ち切り、同期はそのまま続ける)
+  if (isSyncable(bookId) && auth.currentToken()) {
+    await Promise.race([syncNow(), new Promise<void>((r) => setTimeout(r, 5000))]);
+  }
+  renderSyncStatus();
   syncSettingsForm();
   pages = buildPageList(viewer.numPages, doc.settings);
   index = doc.position ? findIndex(pages, doc.position.page) : 0; // N-1: 最後に読んだ位置から開く
@@ -206,9 +227,13 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
 
 function closeBook(): void {
   flushPosition();
+  void syncNow(); // 閉じる前の変更を、接続中なら送る
+  nav.reset();
   if (cropping) exitCrop(false);
   void viewer.close();
   doc = null;
+  base = null;
+  clearTimeout(syncTimer);
   pages = [];
   readerEl.hidden = true;
   startEl.hidden = false;
@@ -304,12 +329,122 @@ function flushPosition(): void {
   if (!doc || !page || cropping) return;
   doc.position = { page: page.ref, updatedAt: Date.now() };
   saveBookDocument(doc);
+  markDirty();
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') flushPosition();
+  if (document.visibilityState === 'hidden') {
+    flushPosition();
+    void syncNow();
+  }
 });
 window.addEventListener('pagehide', flushPosition);
+
+// ---------- 同期(G-2, G-3) ----------
+
+const syncBadge = $('sync-badge');
+const syncText = $('sync-status-text');
+
+function unsyncedCount(): number {
+  return doc && isSyncable(doc.bookId) ? countUnsynced(doc, base) : 0;
+}
+
+/** 未同期の件数と、同期の状態を常に表示する(G-3) */
+function renderSyncStatus(): void {
+  if (!doc || !isSyncable(doc.bookId)) {
+    syncBadge.hidden = true;
+    syncText.textContent = '開発用に開いた本は同期しません';
+    return;
+  }
+  syncBadge.hidden = false;
+  const n = unsyncedCount();
+  const connected = auth.state === 'connected';
+  let text = syncing ? '同期中…' : n === 0 ? '同期済み' : `未同期 ${n}件`;
+  if (!syncing && n > 0 && !connected) text += '(接続待ち)';
+  if (syncError) text += ` ・ ${syncError}`;
+  syncBadge.textContent = text;
+  syncBadge.classList.toggle('pending', !syncing && n > 0);
+  syncBadge.classList.toggle('error', Boolean(syncError));
+  syncText.textContent = `${text}。${connected ? '接続中です。' : '接続が切れています。「今すぐ同期」で再接続できます。'}`;
+}
+
+/** 変更があった。表示を更新し、接続中なら少し待ってから同期する */
+function markDirty(): void {
+  renderSyncStatus();
+  scheduleSync(5000);
+}
+
+function scheduleSync(delayMs: number): void {
+  clearTimeout(syncTimer);
+  if (!doc || !isSyncable(doc.bookId)) return;
+  syncTimer = setTimeout(() => void syncNow(), delayMs);
+}
+
+/** 同期の結果を取り込む。同期中に手元で変えた分も、統合し直して取りこぼさない。 */
+function applyMerged(bookId: string, result: BookSyncDocument): void {
+  const local = doc && doc.bookId === bookId ? doc : loadBookDocument(bookId);
+  const settingsBefore = JSON.stringify(local.settings);
+  const merged = mergeDocuments(local, result);
+  saveBookDocument(merged);
+  saveBase(result);
+  if (!doc || doc.bookId !== bookId) return;
+  doc = merged;
+  base = result;
+  if (JSON.stringify(doc.settings) !== settingsBefore) {
+    syncSettingsForm();
+    if (pages.length > 0) rebuildPages();
+  }
+  nav.refresh();
+}
+
+async function syncNow(): Promise<void> {
+  if (!doc || !isSyncable(doc.bookId)) return;
+  const token = auth.currentToken();
+  if (!token) {
+    renderSyncStatus(); // 接続が切れている間は保留し、件数を表示し続ける
+    return;
+  }
+  if (syncing) {
+    syncAgain = true;
+    return;
+  }
+  syncing = true;
+  syncError = null;
+  renderSyncStatus();
+  const bookId = doc.bookId;
+  try {
+    const result = await syncBook(doc, token);
+    applyMerged(bookId, result.merged);
+  } catch (e) {
+    if (e instanceof AuthExpiredError) auth.expire();
+    else syncError = '通信エラーで同期できませんでした';
+  } finally {
+    syncing = false;
+    renderSyncStatus();
+    // 同期中に増えた変更があれば、もう一度(エラー時は無限に繰り返さない)
+    if (!syncError && auth.currentToken() && (syncAgain || unsyncedCount() > 0)) scheduleSync(syncAgain ? 500 : 5000);
+    syncAgain = false;
+  }
+}
+
+// ---------- ページ移動・しおり・サムネイル(N-2, N-3, N-4) ----------
+
+const nav = createNav({
+  getDoc: () => doc,
+  getPages: () => pages,
+  getIndex: () => index,
+  goTo: (i) => {
+    setMenuVisible(false);
+    go(i);
+  },
+  specFor: (i) => (doc ? (groupAt(pages, i, false, doc.settings)?.spec ?? null) : null),
+  thumbnail: (spec) => viewer.renderThumbnail(spec, 200, 280),
+  commit: () => {
+    if (!doc) return;
+    saveBookDocument(doc);
+    markDirty();
+  },
+});
 
 // ---------- 操作: タップ / スワイプ / ピンチ / ホイール / キー ----------
 
@@ -351,6 +486,10 @@ attachGestures(stageEl, {
 
 document.addEventListener('keydown', (e) => {
   if (!doc || readerEl.hidden) return;
+  if (nav.isOpen()) {
+    if (e.key === 'Escape') nav.close();
+    return;
+  }
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
   if (e.key === 'Escape') {
     if (cropping) exitCrop(true);
@@ -411,6 +550,7 @@ function updateSetting<K extends keyof BookSettings>(key: K, value: BookSettings
   doc.settings[key] = value;
   doc.settingsUpdatedAt[key] = Date.now();
   saveBookDocument(doc);
+  markDirty();
 }
 
 function rebuildPages(): void {
@@ -465,6 +605,14 @@ $('clear-printed').addEventListener('click', () => {
 });
 
 $('open-settings').addEventListener('click', () => (settingsEl.hidden = !settingsEl.hidden));
+$('open-nav').addEventListener('click', () => {
+  setMenuVisible(false);
+  nav.open('jump');
+});
+$('sync-now').addEventListener('click', () => {
+  if (!auth.currentToken()) void onReconnect();
+  else void syncNow();
+});
 $('close-settings').addEventListener('click', () => (settingsEl.hidden = true));
 $('back').addEventListener('click', closeBook);
 

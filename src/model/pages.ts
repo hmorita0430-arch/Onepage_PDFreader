@@ -75,3 +75,23 @@ export function formatPageLabel(index: number, settings: BookSettings): string {
   const { serial, printed } = pageNumbers(index, settings);
   return printed === null ? `通し番号${serial}` : `p.${printed}(通し番号${serial})`;
 }
+
+/**
+ * ページジャンプ(N-2)。通し番号(1始まり)または印刷番号から、論理ページ位置(0始まり)を返す。
+ * 範囲外、印刷番号の対応が未設定のときは null。
+ */
+export function jumpTarget(
+  list: LogicalPage[],
+  settings: BookSettings,
+  mode: 'serial' | 'printed',
+  n: number,
+): number | null {
+  if (!Number.isInteger(n)) return null;
+  let serial = n;
+  if (mode === 'printed') {
+    const pn = settings.printedNumber;
+    if (!pn) return null;
+    serial = n - pn.printed + pn.serial;
+  }
+  return serial >= 1 && serial <= list.length ? serial - 1 : null;
+}
