@@ -1,11 +1,11 @@
 /**
  * タッチ・マウスの操作を、意味のある操作に変換する(D-8, O-1, O-3)。
  *
- * - 画面の左右の端のタップ: すぐ通知(ページ送り)。ズーム中も同じ。
- * - 中央のタップ: ダブルタップでないと確定してから通知(メニュー)。
- * - 中央のダブルタップ(ダブルクリック): ズームの切り替え。
- * - ズーム中のドラッグ: 表示位置の移動のみ。スワイプでのページ送りは行わない。
- * - ズームしていないときの横スワイプ: ページ送り。
+ * - 上部の帯のタップ: すぐ通知(メニュー)。左上・右上でも、ページ送りにはならない。
+ * - 帯の下の、左右の端のタップ: すぐ通知(ページ送り)。ズーム中も同じ。
+ * - 帯の下の中央のタップ: ダブルタップでないと確定してから通知(メニュー)。
+ * - 帯の下の中央のダブルタップ(ダブルクリック): ズームの切り替え。
+ * - ズーム中のドラッグ: 表示位置の移動のみ。**スワイプでのページ送りは行わない**(タップとキーのみ)。
  * - ピンチ、マウスホイール: ズーム。
  * - 長押し(タッチ・ペン。約0.55秒、ほぼ動かさない): onLongPress(読書中にその場でメモを置くため)。
  * - 右クリック(マウス): onContextMenu(メモ・蛍光ペンのメニューを出すため)。
@@ -24,19 +24,23 @@ export interface GestureHandlers {
   /** cancelled: 2本目の指が触れた等で、描画を中止した */
   onDrawEnd?(x: number, y: number, cancelled: boolean): void;
   isZoomed(): boolean;
-  isCenter(xFraction: number): boolean;
-  onEdgeTap(xFraction: number): void;
+  /**
+   * タップした位置の領域。band=上部の帯(すぐメニュー)、edge=左右の端(すぐページ送り)、
+   * center=中央(ダブルタップかどうかを待ってから、メニュー)
+   */
+  zone(xFraction: number, yFraction: number): 'band' | 'edge' | 'center';
+  onEdgeTap(xFraction: number, yFraction: number): void;
+  /** 上部の帯のタップ(メニューの出し入れ)。ダブルタップの判定を待たず、すぐ呼ぶ */
+  onBandTap(): void;
   onCenterTap(): void;
   /** 座標は el の左上を原点とする */
   onDoubleTap(x: number, y: number): void;
-  onSwipe(dx: number): void;
   onPan(dx: number, dy: number): void;
   onZoom(factor: number, x: number, y: number): void;
 }
 
 const TAP_MAX_MOVE = 10;
 const TAP_MAX_MS = 500;
-const SWIPE_MIN = 50;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_DIST = 40;
 const CENTER_TAP_DELAY = 280;
@@ -56,7 +60,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
 
   const rel = (e: { clientX: number; clientY: number }) => {
     const r = el.getBoundingClientRect();
-    return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width };
+    return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height };
   };
 
   const two = (): { dist: number; mid: { x: number; y: number } } => {
@@ -66,12 +70,15 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     return { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2 - r.left, y: (a.y + b.y) / 2 - r.top } };
   };
 
-  const tap = (x: number, y: number, width: number) => {
+  const tap = (x: number, y: number, width: number, height: number) => {
     const xf = x / width;
-    if (!h.isCenter(xf)) {
+    const yf = y / height;
+    const zone = h.zone(xf, yf);
+    if (zone !== 'center') {
       clearTimeout(pending);
       lastCenterTap = null;
-      h.onEdgeTap(xf);
+      if (zone === 'band') h.onBandTap();
+      else h.onEdgeTap(xf, yf);
       return;
     }
     const now = performance.now();
@@ -175,13 +182,10 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       return;
     }
     if (cancelled || g.multi) return;
-    const dx = e.clientX - g.sx;
-    const dy = e.clientY - g.sy;
+    // 横スワイプでのページ送りは行わない(ページ送りはタップとキーのみ)
     if (!g.moved && performance.now() - g.st <= TAP_MAX_MS) {
       const p = rel(e);
-      tap(p.x, p.y, p.w);
-    } else if (g.moved && !h.isZoomed() && Math.abs(dx) >= SWIPE_MIN && Math.abs(dx) > Math.abs(dy) * 1.5) {
-      h.onSwipe(dx);
+      tap(p.x, p.y, p.w, p.h);
     }
   };
   el.addEventListener('pointerup', (e) => end(e, false));

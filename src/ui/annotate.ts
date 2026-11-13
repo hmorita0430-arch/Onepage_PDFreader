@@ -412,7 +412,10 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   el('memo-cancel').addEventListener('click', closeEditor);
   memoText.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) saveMemo();
-    if (e.key === 'Escape') closeEditor();
+    if (e.key === 'Escape') {
+      e.stopPropagation(); // メモ入力欄を閉じるだけにする(その下の画面は閉じない)
+      closeEditor();
+    }
   });
 
   /** 一覧画面などから、既存のメモを開く */

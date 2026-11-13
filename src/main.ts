@@ -15,7 +15,7 @@ import {
 import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown, type ViewSpec } from './model/layout';
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
-import { keyAction, tapAction } from './model/tap';
+import { keyAction, tapZone } from './model/tap';
 import type { BookSettings, BookSyncDocument, PageOverride, PageRef } from './model/types';
 import {
   deleteBook,
@@ -231,6 +231,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
     closeBook();
     throw new Error(`PDFを開けませんでした: ${(e as Error).message}`);
   }
+  pushReaderHistory(); // 「戻る」で、開始画面に戻れるようにする
   doc = loadBookDocument(bookId);
   base = loadBase(bookId);
   syncError = null;
@@ -252,7 +253,8 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   await renderCurrent();
 }
 
-function closeBook(): void {
+/** @param viaBack ブラウザの「戻る」で閉じる場合。履歴は、ブラウザがすでに1つ戻している */
+function closeBook(viaBack = false): void {
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
@@ -268,7 +270,92 @@ function closeBook(): void {
   startEl.hidden = false;
   settingsEl.hidden = true;
   setMenuVisible(false);
+  if (!viaBack) popReaderHistory();
   void refreshLibrary();
+}
+
+// ---------- 戻る操作(ブラウザの「戻る」・Androidの戻るジェスチャー) ----------
+//
+// 本を開いている間だけ、履歴を1つ積んでおく(番兵)。「戻る」でそれが取り除かれたら、
+//   1. 開いている画面(メモ入力・メニュー・一覧・余白設定・設定・注釈ツール)があれば、1つ閉じて、番兵を積み直す
+//   2. 何も開いていなければ、本を閉じて開始画面へ
+// メニューバー(上下のバー)は「画面」に数えない(戻るで、すぐ開始画面に戻れるように)。
+
+let sentinelActive = false;
+let ignoreNextPop = false;
+const SENTINEL = { app: 'reader' };
+
+function pushReaderHistory(): void {
+  if (sentinelActive) return;
+  history.pushState(SENTINEL, '');
+  sentinelActive = true;
+}
+
+/** 本をボタンなどで閉じたとき、積んだ履歴を取り除く(「戻る」を1回余計に押させないため) */
+function popReaderHistory(): void {
+  if (!sentinelActive) return;
+  sentinelActive = false;
+  ignoreNextPop = true;
+  history.back();
+}
+
+/** 前面にある画面を1つ閉じる。閉じたものがあれば true */
+function closeTopOverlay(): boolean {
+  if (annot.isEditorOpen()) {
+    annot.closeEditor();
+    return true;
+  }
+  if (annot.isMenuOpen()) {
+    annot.closeMenu();
+    return true;
+  }
+  if (annot.isOneShot()) {
+    annot.cancelOneShot();
+    return true;
+  }
+  if (nav.isOpen()) {
+    nav.close();
+    return true;
+  }
+  if (cropping) {
+    exitCrop(true);
+    return true;
+  }
+  if (!settingsEl.hidden) {
+    settingsEl.hidden = true;
+    return true;
+  }
+  if (annot.isActive()) {
+    annot.exit();
+    return true;
+  }
+  return false;
+}
+
+window.addEventListener('popstate', () => {
+  if (ignoreNextPop) {
+    ignoreNextPop = false;
+    return;
+  }
+  if (!doc) {
+    // 本を閉じたあとの「進む」で、読書画面の履歴へ入ってしまった。何も起きない状態になるので、元に戻す
+    if ((history.state as { app?: string } | null)?.app === 'reader') {
+      ignoreNextPop = true;
+      history.back();
+    }
+    return;
+  }
+  sentinelActive = false; // ブラウザが、読書画面の履歴を1つ戻した
+  if (closeTopOverlay()) pushReaderHistory(); // 次の「戻る」のために、積み直す
+  else closeBook(true);
+});
+
+// 本を開いたまま読み込み直した(更新ボタンなど)ときは、古い読書画面の履歴が1つ残っている。
+// そのままだと、開始画面の最初の「戻る」が何も起きないので、起動時に1つ戻って取り除く。
+if ((history.state as { app?: string } | null)?.app === 'reader') {
+  ignoreNextPop = true;
+  setTimeout(() => (ignoreNextPop = false), 1500); // 戻る先が無く、何も起きなかった場合に、次の「戻る」を飲み込まない
+  history.back();
 }
 
 // ---------- 表示 ----------
@@ -656,12 +743,20 @@ attachGestures(stageEl, {
     if (doc && !cropping && !nav.isOpen()) annot.openContextMenu(x, y);
   },
   isZoomed: () => isZoomed(view),
-  isCenter: (xf) => !doc || tapAction(xf, doc.settings.openDirection) === 'menu',
-  onEdgeTap: (xf) => {
+  // 上部の帯(上約20%)はメニュー、その下の左右の端25%ずつがページ送り、中央がメニュー(ダブルタップは拡大)
+  zone: (xf, yf) => {
+    if (!doc) return 'center';
+    const z = tapZone(xf, yf, doc.settings.openDirection);
+    return z === 'band' ? 'band' : z === 'center' ? 'center' : 'edge';
+  },
+  onEdgeTap: (xf, yf) => {
     if (!doc) return;
-    const action = tapAction(xf, doc.settings.openDirection);
-    if (action === 'next') goNext();
-    else if (action === 'prev') goPrev();
+    const z = tapZone(xf, yf, doc.settings.openDirection);
+    if (z === 'next') goNext();
+    else if (z === 'prev') goPrev();
+  },
+  onBandTap: () => {
+    if (doc && !cropping) setMenuVisible(Boolean(topbar.hidden));
   },
   onCenterTap: () => {
     if (doc && !cropping) setMenuVisible(Boolean(topbar.hidden));
@@ -670,13 +765,6 @@ attachGestures(stageEl, {
     if (!doc) return;
     view = zoomAt(hostBox(), fit, view, isZoomed(view) ? 1 : DOUBLE_TAP_Z, x, y);
     applyView();
-  },
-  onSwipe: (dx) => {
-    if (!doc) return;
-    // 右開き: 指を右へ送ると次(本をめくる向き)。左開きは逆。
-    const next = doc.settings.openDirection === 'rtl' ? dx > 0 : dx < 0;
-    if (next) goNext();
-    else goPrev();
   },
   onPan: (dx, dy) => {
     if (!doc) return;
@@ -693,7 +781,7 @@ attachGestures(stageEl, {
 document.addEventListener('keydown', (e) => {
   if (!doc || readerEl.hidden) return;
   if (nav.isOpen()) {
-    if (e.key === 'Escape') nav.close();
+    if (e.key === 'Escape') closeTopOverlay();
     return;
   }
   if (annot.isEditorOpen()) return; // メモの入力中。文字入力を妨げない
@@ -713,11 +801,7 @@ document.addEventListener('keydown', (e) => {
     }
   }
   if (e.key === 'Escape') {
-    if (annot.isMenuOpen()) annot.closeMenu();
-    else if (annot.isOneShot()) annot.cancelOneShot();
-    else if (cropping) exitCrop(true);
-    else if (annot.isActive()) annot.exit();
-    else setMenuVisible(false);
+    if (!closeTopOverlay()) setMenuVisible(false);
     return;
   }
   // ズーム: + / - / 0(フィットに戻す)
@@ -930,7 +1014,7 @@ $('disconnect').addEventListener('click', () => {
   renderSyncStatus();
 });
 $('close-settings').addEventListener('click', () => (settingsEl.hidden = true));
-$('back').addEventListener('click', closeBook);
+$('back').addEventListener('click', () => closeBook());
 
 // ---------- 余白の設定(D-5) ----------
 

@@ -1,12 +1,29 @@
 import type { OpenDirection } from './types';
 
-export type TapAction = 'next' | 'prev' | 'menu';
+/** 上部の帯(画面の上から、この割合まで)は、左右どこでもメニューの出し入れ。 */
+export const TOP_BAND = 0.2;
+/** 左右の端(ページ送り)の幅の割合 */
+export const EDGE_WIDTH = 0.25;
 
-/** 画面の左右の端をタップでページ送り、中央でメニュー(O-1)。「次」の側は開き方向に連動(O-2)。 */
-export function tapAction(xFraction: number, direction: OpenDirection, edge = 0.25): TapAction {
+/**
+ * タップの領域(O-1)。
+ * - band  : 上部の帯(上約20%・全幅)。メニューの出し入れ。左上・右上のタップが、ページ送りにならないように。
+ * - next/prev : 帯の下の、左右の端25%ずつ。ページ送り。「次」の側は開き方向に連動(O-2)。
+ * - center: 帯の下の中央50%。メニューの出し入れ(ダブルタップは拡大)。
+ */
+export type TapZone = 'band' | 'next' | 'prev' | 'center';
+
+export function tapZone(
+  xFraction: number,
+  yFraction: number,
+  direction: OpenDirection,
+  edge = EDGE_WIDTH,
+  band = TOP_BAND,
+): TapZone {
+  if (yFraction < band) return 'band';
   if (xFraction < edge) return direction === 'rtl' ? 'next' : 'prev';
   if (xFraction > 1 - edge) return direction === 'rtl' ? 'prev' : 'next';
-  return 'menu';
+  return 'center';
 }
 
 /** 矢印キーの割り当て。右開きは「←で次」が自然だが、仮置きの割り当て(要件8章)に従い、

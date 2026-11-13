@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf } from '../src/model/pages';
-import { keyAction, tapAction } from '../src/model/tap';
+import { keyAction, tapZone } from '../src/model/tap';
 import { DEFAULT_SETTINGS, type BookSettings } from '../src/model/types';
 
 const s = (over: Partial<BookSettings> = {}): BookSettings => ({
@@ -85,19 +85,30 @@ describe('印刷番号が1未満のページ', () => {
   });
 });
 
-describe('tapAction / keyAction', () => {
-  it('右開き: 左端=次、右端=前、中央=メニュー', () => {
-    expect(tapAction(0.1, 'rtl')).toBe('next');
-    expect(tapAction(0.9, 'rtl')).toBe('prev');
-    expect(tapAction(0.5, 'rtl')).toBe('menu');
+describe('tapZone / keyAction', () => {
+  it('右開き: 帯の下では、左端=次、右端=前、中央=中央', () => {
+    expect(tapZone(0.1, 0.5, 'rtl')).toBe('next');
+    expect(tapZone(0.9, 0.5, 'rtl')).toBe('prev');
+    expect(tapZone(0.5, 0.5, 'rtl')).toBe('center');
   });
   it('左開き: 右端=次、左端=前', () => {
-    expect(tapAction(0.9, 'ltr')).toBe('next');
-    expect(tapAction(0.1, 'ltr')).toBe('prev');
+    expect(tapZone(0.9, 0.5, 'ltr')).toBe('next');
+    expect(tapZone(0.1, 0.5, 'ltr')).toBe('prev');
   });
-  it('境界(25%)ちょうどは中央扱い', () => {
-    expect(tapAction(0.25, 'rtl')).toBe('menu');
-    expect(tapAction(0.75, 'rtl')).toBe('menu');
+  it('上部の帯(上20%)は、左右の端でも、メニュー(ページ送りにならない)', () => {
+    for (const x of [0.02, 0.1, 0.5, 0.9, 0.98]) expect(tapZone(x, 0.1, 'rtl')).toBe('band');
+    expect(tapZone(0.05, 0.0, 'rtl')).toBe('band'); // 左上の角
+    expect(tapZone(0.95, 0.0, 'ltr')).toBe('band'); // 右上の角
+  });
+  it('帯の境界(20%)ちょうどから下は、通常の領域', () => {
+    expect(tapZone(0.1, 0.1999, 'rtl')).toBe('band');
+    expect(tapZone(0.1, 0.2, 'rtl')).toBe('next');
+    expect(tapZone(0.5, 0.2, 'rtl')).toBe('center');
+  });
+  it('左右の境界(25%)ちょうどは中央扱い', () => {
+    expect(tapZone(0.25, 0.5, 'rtl')).toBe('center');
+    expect(tapZone(0.75, 0.5, 'rtl')).toBe('center');
+    expect(tapZone(0.2499, 0.5, 'rtl')).toBe('next');
   });
   it('キー操作は開き方向に連動し、Home/End は先頭/末尾', () => {
     expect(keyAction('ArrowLeft', 'rtl')).toBe('next');
