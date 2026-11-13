@@ -28,3 +28,16 @@ export function deleteNamedPage(list: readonly NamedPage[], id: string, now = Da
 export function visibleNamed(list: readonly NamedPage[], kind: NamedPage['kind']): NamedPage[] {
   return list.filter((n) => !n.deleted && n.kind === kind);
 }
+
+/**
+ * 論理ページ(0始まり)が属する章。目次(kind: 'toc')のうち、そのページ以前で最後のもの。
+ * 目次が無い、または最初の目次より前なら null。
+ */
+export function chapterTitleAt(
+  chapters: readonly { title: string; index: number }[],
+  index: number,
+): string | null {
+  let best: { title: string; index: number } | null = null;
+  for (const c of chapters) if (c.index <= index && (!best || c.index >= best.index)) best = c;
+  return best ? best.title : null;
+}

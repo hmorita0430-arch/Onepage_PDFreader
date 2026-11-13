@@ -168,3 +168,106 @@ describe('Markdown(読書ノート)', () => {
     expect(md).not.toContain('![');
   });
 });
+
+import { restoreAnnotation, setAnnotationColor, setStrokeWidth, simplifyPoints, smoothPath, STROKE_WIDTHS } from '../src/model/annotations';
+import { chapterTitleAt } from '../src/model/named';
+
+describe('取り消し用の操作(同期で古い状態に負けない)', () => {
+  it('削除→元に戻す: 削除の印が外れ、更新日時は進む', () => {
+    const l0 = addRect([], { page: R, color: 'yellow', rect: { x: 0, y: 0, w: 0.1, h: 0.1 } }, 100, 'a');
+    const l1 = deleteAnnotation(l0, 'a', 200);
+    const l2 = restoreAnnotation(l1, 'a', 300);
+    expect(l2[0]!.deleted).toBeUndefined();
+    expect(l2[0]!.updatedAt).toBeGreaterThan(l1[0]!.updatedAt);
+    // 他の端末に「削除済み」が届いていても、元に戻した方が勝つ
+    const a = { ...newBookSyncDocument('b'), annotations: l1 };
+    const b = { ...newBookSyncDocument('b'), annotations: l2 };
+    expect(visibleAnnotations(mergeDocuments(a, b).annotations)).toHaveLength(1);
+  });
+  it('色・太さの変更。対象外の種類は無視する', () => {
+    let l = addRect([], { page: R, color: 'yellow', rect: { x: 0, y: 0, w: 0.1, h: 0.1 } }, 1, 'r');
+    l = addStroke(l, { page: R, color: 'blue', points: [{ x: 0, y: 0 }, { x: 0.1, y: 0 }] }, 2, 's');
+    l = addMemo(l, { page: R, at: { x: 0, y: 0 }, text: 'm' }, 3, 'm');
+    l = setAnnotationColor(l, 'r', 'green', 10);
+    l = setAnnotationColor(l, 'm', 'green', 10); // メモは色を持たない
+    l = setStrokeWidth(l, 's', STROKE_WIDTHS.thick, 11);
+    l = setStrokeWidth(l, 'r', STROKE_WIDTHS.thick, 11); // 四角は太さを持たない
+    expect(l.find((x) => x.id === 'r')).toMatchObject({ color: 'green', updatedAt: 10 });
+    expect(l.find((x) => x.id === 'm')).not.toHaveProperty('color');
+    expect(l.find((x) => x.id === 's')).toMatchObject({ width: STROKE_WIDTHS.thick, updatedAt: 11 });
+    expect(l.find((x) => x.id === 'r')).not.toHaveProperty('width');
+  });
+  it('太さは 細 < 中 < 太', () => {
+    expect(STROKE_WIDTHS.thin).toBeLessThan(STROKE_WIDTHS.medium);
+    expect(STROKE_WIDTHS.medium).toBeLessThan(STROKE_WIDTHS.thick);
+  });
+});
+
+describe('自由線の補正', () => {
+  const P = { w: 2400, h: 1600 };
+  it('一直線上の細かい点は捨てて、両端だけにする', () => {
+    const pts = Array.from({ length: 50 }, (_, i) => ({ x: 0.2 + i * 0.01, y: 0.5 }));
+    expect(simplifyPoints(pts, 1, P)).toEqual([pts[0], pts[49]]);
+  });
+  it('手ぶれ(許容より小さいずれ)は捨て、曲がり角は残す', () => {
+    const pts = [
+      { x: 0.1, y: 0.5 }, { x: 0.2, y: 0.5 + 0.2 / 1600 }, { x: 0.3, y: 0.5 - 0.2 / 1600 }, { x: 0.4, y: 0.5 },
+      { x: 0.4, y: 0.7 }, // 直角に曲がる
+    ];
+    const s = simplifyPoints(pts, 1, P);
+    expect(s).toContainEqual({ x: 0.4, y: 0.5 }); // 曲がり角
+    expect(s).toContainEqual(pts[0]);
+    expect(s).toContainEqual(pts[4]);
+    expect(s.length).toBeLessThan(pts.length);
+  });
+  it('許容を超えるずれは残す', () => {
+    const pts = [{ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.5 + 30 / 1600 }, { x: 0.9, y: 0.5 }];
+    expect(simplifyPoints(pts, 1, P)).toHaveLength(3);
+  });
+  it('2点以下はそのまま', () => {
+    expect(simplifyPoints([{ x: 0, y: 0 }], 1, P)).toHaveLength(1);
+    expect(simplifyPoints([{ x: 0, y: 0 }, { x: 1, y: 1 }], 1, P)).toHaveLength(2);
+  });
+  it('滑らかなパス: 点の数に応じた形で、2点は直線・3点以上は曲線', () => {
+    expect(smoothPath([])).toBe('');
+    expect(smoothPath([{ x: 1, y: 2 }])).toMatch(/^M 1 2 l /); // 点だけでも丸を描ける
+    expect(smoothPath([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBe('M 0 0 L 10 0');
+    const d = smoothPath([{ x: 0, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 0 }]);
+    expect(d).toBe('M 0 0 Q 10 10 15 5 L 20 0'); // 中点(15,5)まで曲線、最後は終点へ
+  });
+});
+
+describe('章(目次)の判定', () => {
+  const ch = [{ title: '第1章', index: 4 }, { title: '第2章', index: 20 }, { title: '第3章', index: 50 }];
+  it('そのページ以前で最後の目次', () => {
+    expect(chapterTitleAt(ch, 4)).toBe('第1章');
+    expect(chapterTitleAt(ch, 19)).toBe('第1章');
+    expect(chapterTitleAt(ch, 20)).toBe('第2章');
+    expect(chapterTitleAt(ch, 99)).toBe('第3章');
+  });
+  it('最初の目次より前、目次なしは null', () => {
+    expect(chapterTitleAt(ch, 3)).toBeNull();
+    expect(chapterTitleAt([], 10)).toBeNull();
+  });
+  it('並び順に依存しない', () => {
+    expect(chapterTitleAt([...ch].reverse(), 25)).toBe('第2章');
+  });
+});
+
+describe('Markdown: 章ごとの見出し', () => {
+  const at = new Date(2026, 10, 13, 9, 5);
+  const pg = (label: string, chapter?: string | null) => ({ label, imagePath: null, items: [{ kind: 'memo' as const, n: 1, text: label }], ...(chapter !== undefined ? { chapter } : {}) });
+  it('目次があれば、章を ##、ページを ### にし、章が変わるときだけ見出しを出す', () => {
+    const md = buildMarkdown({ title: 'x', exportedAt: at, pages: [pg('p.1', null), pg('p.2', '第1章'), pg('p.3', '第1章'), pg('p.9', '第2章')] });
+    expect(md).toContain('## (章の前)\n\n### p.1');
+    expect(md.match(/^## 第1章$/gm)).toHaveLength(1);
+    expect(md).toContain('### p.2');
+    expect(md).toContain('### p.3');
+    expect(md).toContain('## 第2章\n\n### p.9');
+  });
+  it('目次が1つも無ければ、従来どおりページが ##', () => {
+    const md = buildMarkdown({ title: 'x', exportedAt: at, pages: [pg('p.1'), pg('p.2')] });
+    expect(md).toContain('## p.1');
+    expect(md).not.toContain('###');
+  });
+});

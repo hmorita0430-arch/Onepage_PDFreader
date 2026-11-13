@@ -1,4 +1,4 @@
-import { COLORS, numberMemos, type PageSize } from '../model/annotations';
+import { COLORS, numberMemos, smoothPath, type PageSize } from '../model/annotations';
 import type { Annotation, NormRect } from '../model/types';
 
 /** 蛍光ペンの濃さ。紙の文字が透けるよう、乗算で重ねる */
@@ -28,10 +28,8 @@ export function drawAnnotations(canvas: HTMLCanvasElement, annos: readonly Annot
       ctx.lineWidth = (a.width / region.w) * W; // 画像の幅に対する割合 → 画素
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.beginPath();
-      a.points.forEach((p, i) => (i === 0 ? ctx.moveTo(px(p.x), py(p.y)) : ctx.lineTo(px(p.x), py(p.y))));
-      if (a.points.length === 1) ctx.lineTo(px(a.points[0]!.x) + 0.01, py(a.points[0]!.y)); // 点だけでも丸を描く
-      ctx.stroke();
+      // 画面表示と同じ規則(smoothPath)で、滑らかな曲線にする
+      ctx.stroke(new Path2D(smoothPath(a.points.map((p) => ({ x: px(p.x), y: py(p.y) })))));
     }
   }
   ctx.restore();

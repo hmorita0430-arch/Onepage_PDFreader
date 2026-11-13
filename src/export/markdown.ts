@@ -15,6 +15,8 @@ export interface NoteItem {
 }
 
 export interface NotePage {
+  /** 属する章(目次の名前)。目次が1つも無ければ undefined、最初の目次より前なら null */
+  chapter?: string | null;
   /** 例: p.45(通し番号52) */
   label: string;
   /** Markdown からの相対パス。無ければ画像なし */
@@ -41,8 +43,15 @@ export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NoteP
   out.push(`- 出力日時: ${formatDateTime(p.exportedAt)}`);
   out.push(`- メモ ${memos}件 / 蛍光ペン ${highlights}件`, '');
 
+  // 目次(章)があれば、章を見出し(##)、ページを小見出し(###)にする
+  const hasChapters = p.pages.some((pg) => pg.chapter !== undefined);
+  let currentChapter: string | null | undefined;
   for (const pg of p.pages) {
-    out.push(`## ${pg.label}`, '');
+    if (hasChapters && (currentChapter === undefined || pg.chapter !== currentChapter)) {
+      currentChapter = pg.chapter ?? null;
+      out.push(`## ${currentChapter === null ? '(章の前)' : oneLine(currentChapter)}`, '');
+    }
+    out.push(`${hasChapters ? '###' : '##'} ${pg.label}`, '');
     if (pg.imagePath) out.push(`![${pg.label}](${pg.imagePath})`, '');
     for (const it of pg.items) {
       if (it.kind === 'memo') {

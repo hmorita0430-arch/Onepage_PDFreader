@@ -128,6 +128,7 @@
           <div class="tabs" role="tablist">
             <button type="button" role="tab" data-tab="jump" aria-selected="true">移動</button>
             <button type="button" role="tab" data-tab="named" aria-selected="false">しおり・目次</button>
+            <button type="button" role="tab" data-tab="annos" aria-selected="false">注釈</button>
             <button type="button" role="tab" data-tab="thumbs" aria-selected="false">サムネイル</button>
           </div>
           <button id="nav-close" class="icon" type="button" aria-label="閉じる">✕</button>
@@ -163,6 +164,32 @@
           <ul id="named-toc" class="named-list"></ul>
         </div>
 
+        <div id="nav-annos" class="nav-body" hidden>
+          <div class="anno-filters">
+            <input id="anno-q" type="search" placeholder="文字で検索(メモ・蛍光ペンの文字)" aria-label="検索" />
+            <select id="anno-type" aria-label="種類">
+              <option value="all">すべて</option>
+              <option value="memo">メモ</option>
+              <option value="highlight">蛍光ペン</option>
+            </select>
+            <select id="anno-color" aria-label="色">
+              <option value="all">すべての色</option>
+              <option value="yellow">黄</option>
+              <option value="green">緑</option>
+              <option value="pink">ピンク</option>
+              <option value="blue">青</option>
+            </select>
+          </div>
+          <label class="check"><input id="anno-group" type="checkbox" checked /> 目次(章)ごとにまとめる</label>
+          <p id="anno-count" class="muted"></p>
+          <ul id="anno-list" class="anno-list"></ul>
+          <div class="anno-export">
+            <button id="anno-export" class="primary" type="button">ドライブに書き出す(読書ノート)</button>
+            <p id="anno-export-status" class="muted" role="status"></p>
+            <a id="anno-export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
+          </div>
+        </div>
+
         <div id="nav-thumbs" class="nav-body thumbs" hidden>
           <div id="thumb-grid" class="thumb-grid"></div>
         </div>
@@ -177,6 +204,15 @@
           <button id="ann-next" type="button" aria-label="次のページ">▶</button>
         </div>
         <div class="ann-row">
+          <button id="ann-undo" type="button" aria-label="元に戻す" disabled>↶</button>
+          <button id="ann-redo" type="button" aria-label="やり直す" disabled>↷</button>
+          <span id="ann-widths" class="ann-widths" role="group" aria-label="線の太さ" hidden>
+            <button type="button" data-width="thin" aria-pressed="false">細</button>
+            <button type="button" data-width="medium" aria-pressed="true">中</button>
+            <button type="button" data-width="thick" aria-pressed="false">太</button>
+          </span>
+        </div>
+        <div class="ann-row">
           <span class="ann-colors" role="group" aria-label="色">
             <button type="button" data-color="yellow" aria-label="黄" aria-pressed="true"></button>
             <button type="button" data-color="green" aria-label="緑" aria-pressed="false"></button>
@@ -187,6 +223,20 @@
         </div>
         <p id="ann-hint" class="muted"></p>
       </section>
+
+      <div id="oneshot-hint" class="oneshot-hint" hidden role="status"></div>
+
+      <div id="ctx-menu" class="ctx-menu" hidden role="menu" aria-label="注釈">
+        <button type="button" role="menuitem" data-ctx="memo">✎ ここにメモを置く</button>
+        <button type="button" role="menuitem" data-ctx="rect">▭ 蛍光ペン(四角で囲む)</button>
+        <button type="button" role="menuitem" data-ctx="stroke">〰 蛍光ペン(なぞる)</button>
+        <span class="ctx-colors" role="group" aria-label="色">
+          <button type="button" data-ctx-color="yellow" aria-label="黄" aria-pressed="true"></button>
+          <button type="button" data-ctx-color="green" aria-label="緑" aria-pressed="false"></button>
+          <button type="button" data-ctx-color="pink" aria-label="ピンク" aria-pressed="false"></button>
+          <button type="button" data-ctx-color="blue" aria-label="青" aria-pressed="false"></button>
+        </span>
+      </div>
 
       <div id="memo-editor" class="memo-editor" hidden role="dialog" aria-modal="true" aria-label="メモ">
         <div class="memo-card">

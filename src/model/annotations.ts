@@ -27,8 +27,10 @@ export const COLORS: Record<AnnotationColor, { label: string; css: string }> = {
 };
 export const COLOR_KEYS = Object.keys(COLORS) as AnnotationColor[];
 
-/** 自由線の太さ(元画像の幅に対する割合)。見開き2400pxの写真で約29px */
-export const STROKE_WIDTH = 0.012;
+/** 自由線の太さ(元画像の幅に対する割合)。中は、見開き2400pxの写真で約29px */
+export const STROKE_WIDTHS = { thin: 0.006, medium: 0.012, thick: 0.024 } as const;
+export type StrokeThickness = keyof typeof STROKE_WIDTHS;
+export const STROKE_WIDTH = STROKE_WIDTHS.medium;
 
 export interface PageSize {
   w: number;
@@ -79,6 +81,27 @@ export function deleteAnnotation(list: readonly Annotation[], id: string, now = 
 }
 
 export const visibleAnnotations = (list: readonly Annotation[]): Annotation[] => list.filter((a) => !a.deleted);
+
+/** 削除済みを元に戻す(「元に戻す」用)。更新日時は進めるので、同期で古い状態に負けない。 */
+export function restoreAnnotation(list: readonly Annotation[], id: string, now = Date.now()): Annotation[] {
+  return list.map((a) => {
+    if (a.id !== id) return a;
+    const { deleted: _removed, ...rest } = a;
+    return { ...rest, updatedAt: bump(a.updatedAt, now) } as Annotation;
+  });
+}
+
+/** 蛍光ペンの色を変える */
+export function setAnnotationColor(list: readonly Annotation[], id: string, color: AnnotationColor, now = Date.now()): Annotation[] {
+  return list.map((a) =>
+    a.id === id && (a.kind === 'highlight-rect' || a.kind === 'highlight-stroke') ? { ...a, color, updatedAt: bump(a.updatedAt, now) } : a,
+  );
+}
+
+/** 自由線の太さを変える */
+export function setStrokeWidth(list: readonly Annotation[], id: string, width: number, now = Date.now()): Annotation[] {
+  return list.map((a) => (a.id === id && a.kind === 'highlight-stroke' ? { ...a, width, updatedAt: bump(a.updatedAt, now) } : a));
+}
 
 // ---- 座標 ----
 
@@ -155,6 +178,62 @@ export function hitHighlight(a: Annotation, p: NormPoint, tol: number, page: Pag
     }
   }
   return false;
+}
+
+// ---- 自由線の補正 ----
+
+/**
+ * 自由線の点を間引く(Ramer–Douglas–Peucker)。tol は元PDFの単位(ポイント)での許容のずれ。
+ * 細かい手ぶれの点を捨てつつ、曲がり角は残す。データも小さくなる。
+ */
+export function simplifyPoints(points: readonly NormPoint[], tol: number, page: PageSize): NormPoint[] {
+  if (points.length <= 2) return [...points];
+  const px = (p: NormPoint) => ({ x: p.x * page.w, y: p.y * page.h });
+  const keep = new Array<boolean>(points.length).fill(false);
+  keep[0] = true;
+  keep[points.length - 1] = true;
+  const stack: [number, number][] = [[0, points.length - 1]];
+  while (stack.length > 0) {
+    const [lo, hi] = stack.pop()!;
+    const a = px(points[lo]!);
+    const b = px(points[hi]!);
+    let worst = -1;
+    let worstDist = tol;
+    for (let i = lo + 1; i < hi; i++) {
+      const p = px(points[i]!);
+      const d = distToSegment(p.x, p.y, a.x, a.y, b.x, b.y);
+      if (d > worstDist) {
+        worstDist = d;
+        worst = i;
+      }
+    }
+    if (worst >= 0) {
+      keep[worst] = true;
+      stack.push([lo, worst], [worst, hi]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+/**
+ * 点列を、角の無い滑らかな曲線にする SVG のパス。各点を制御点、隣り合う点の中点を通過点とする二次曲線。
+ * 手ぶれのカクカクが目立たなくなる。画面表示と書き出し画像で同じ形になるよう、共通の規則にする。
+ */
+export function smoothPath(points: readonly { x: number; y: number }[]): string {
+  const n = points.length;
+  if (n === 0) return '';
+  const f = (v: number) => Number(v.toFixed(3));
+  const p0 = points[0]!;
+  if (n === 1) return `M ${f(p0.x)} ${f(p0.y)} l 0.01 0`;
+  if (n === 2) return `M ${f(p0.x)} ${f(p0.y)} L ${f(points[1]!.x)} ${f(points[1]!.y)}`;
+  let d = `M ${f(p0.x)} ${f(p0.y)}`;
+  for (let i = 1; i < n - 1; i++) {
+    const p = points[i]!;
+    const q = points[i + 1]!;
+    d += ` Q ${f(p.x)} ${f(p.y)} ${f((p.x + q.x) / 2)} ${f((p.y + q.y) / 2)}`;
+  }
+  const last = points[n - 1]!;
+  return `${d} L ${f(last.x)} ${f(last.y)}`;
 }
 
 // ---- ページとの対応・番号 ----

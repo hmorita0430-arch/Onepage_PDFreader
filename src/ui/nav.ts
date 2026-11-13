@@ -1,7 +1,8 @@
+import { COLORS, COLOR_KEYS, deleteAnnotation, setAnnotationColor, visibleAnnotations } from '../model/annotations';
 import type { ViewSpec } from '../model/layout';
-import { addNamedPage, deleteNamedPage, renameNamedPage, visibleNamed } from '../model/named';
+import { addNamedPage, chapterTitleAt, deleteNamedPage, renameNamedPage, visibleNamed } from '../model/named';
 import { findIndex, formatPageLabel, jumpTarget, type LogicalPage } from '../model/pages';
-import type { BookSyncDocument, NamedPage } from '../model/types';
+import type { Annotation, AnnotationColor, BookSyncDocument, NamedPage } from '../model/types';
 
 /**
  * ページ移動の画面: ページジャンプ(N-2)、しおり・目次(N-4)、サムネイル(N-3)。
@@ -15,11 +16,17 @@ export interface NavDeps {
   /** 1ページ表示のときの、トリミング後の描画範囲 */
   specFor(index: number): ViewSpec | null;
   thumbnail(spec: ViewSpec): Promise<string | null>;
-  /** 名前つきページを書き換えた。保存と同期の予約は呼ぶ側で行う */
+  /** 名前つきページ・注釈を書き換えた。保存と同期の予約は呼ぶ側で行う */
   commit(): void;
+  /** 既存のメモを入力欄で開く */
+  editMemo(id: string): void;
+  /** 蛍光ペンの箇所の文字(文字データが無ければ null) */
+  ocrTexts(annos: Annotation[]): Promise<Map<string, string | null>>;
+  /** 読書ノートをドライブへ書き出す */
+  exportNotes(onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
 }
 
-type Tab = 'jump' | 'named' | 'thumbs';
+type Tab = 'jump' | 'named' | 'annos' | 'thumbs';
 
 const el = <T extends HTMLElement>(id: string): T => {
   const e = document.getElementById(id);
@@ -29,7 +36,7 @@ const el = <T extends HTMLElement>(id: string): T => {
 
 export function createNav(deps: NavDeps) {
   const root = el('nav');
-  const panes: Record<Tab, HTMLElement> = { jump: el('nav-jump'), named: el('nav-named'), thumbs: el('nav-thumbs') };
+  const panes: Record<Tab, HTMLElement> = { jump: el('nav-jump'), named: el('nav-named'), annos: el('nav-annos'), thumbs: el('nav-thumbs') };
   const tabButtons = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
   let tab: Tab = 'jump';
 
@@ -167,6 +174,183 @@ export function createNav(deps: NavDeps) {
     refresh();
   });
 
+  // ---- 注釈の一覧(ページ順・検索・絞り込み・章ごと・編集・削除・書き出し) ----
+  const annoQ = el<HTMLInputElement>('anno-q');
+  const annoType = el<HTMLSelectElement>('anno-type');
+  const annoColor = el<HTMLSelectElement>('anno-color');
+  const annoGroup = el<HTMLInputElement>('anno-group');
+  const annoCount = el('anno-count');
+  const annoList = el('anno-list');
+  const ocrCache = new Map<string, string | null>();
+  let annoEpoch = 0;
+
+  interface Row {
+    a: Annotation;
+    index: number;
+  }
+
+  function kindLabel(a: Annotation): string {
+    return a.kind === 'memo' ? 'メモ' : a.kind === 'highlight-rect' ? '蛍光ペン(四角)' : '蛍光ペン(線)';
+  }
+
+  /** 行に出す文章: メモは本文、蛍光ペンは文字データがあればその文字 */
+  function rowText(a: Annotation): string {
+    if (a.kind === 'memo') return a.text;
+    const t = ocrCache.get(a.id);
+    return t ? t : '';
+  }
+
+  function matches(r: Row, q: string, type: string, color: string): boolean {
+    const a = r.a;
+    if (type === 'memo' && a.kind !== 'memo') return false;
+    if (type === 'highlight' && a.kind === 'memo') return false;
+    if (color !== 'all' && (a.kind === 'memo' || a.color !== color)) return false;
+    if (q === '') return true;
+    return rowText(a).toLowerCase().includes(q) || formatPageLabel(r.index, deps.getDoc()!.settings).toLowerCase().includes(q);
+  }
+
+  function renderAnnos(): void {
+    const doc = deps.getDoc();
+    if (!doc) return;
+    const pages = deps.getPages();
+    const all: Row[] = visibleAnnotations(doc.annotations)
+      .map((a) => ({ a, index: findIndex(pages, a.page) }))
+      .sort((x, y) => x.index - y.index || x.a.createdAt - y.a.createdAt);
+    const q = annoQ.value.trim().toLowerCase();
+    const rows = all.filter((r) => matches(r, q, annoType.value, annoColor.value));
+    const memos = all.filter((r) => r.a.kind === 'memo').length;
+    annoCount.textContent = `メモ ${memos}件・蛍光ペン ${all.length - memos}件` + (rows.length !== all.length ? `(表示 ${rows.length}件)` : '');
+
+    const chapters = visibleNamed(doc.namedPages, 'toc').map((n) => ({ title: n.title, index: findIndex(pages, n.page) }));
+    const grouped = annoGroup.checked && chapters.length > 0;
+    const children: HTMLElement[] = [];
+    let current: string | null | undefined;
+    for (const r of rows) {
+      if (grouped) {
+        const ch = chapterTitleAt(chapters, r.index);
+        if (current === undefined || ch !== current) {
+          current = ch;
+          const h = document.createElement('li');
+          h.className = 'anno-chapter';
+          h.textContent = ch === null ? '(章の前)' : ch; // 利用者の入力なので textContent
+          children.push(h);
+        }
+      }
+      children.push(annoRow(r, doc));
+    }
+    if (rows.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = all.length === 0 ? '注釈はまだありません。読書中に右クリック(PC)や長押し(スマホ)で付けられます。' : '条件に合う注釈がありません';
+      children.push(li);
+    }
+    annoList.replaceChildren(...children);
+    void loadOcr(rows, q);
+  }
+
+  function annoRow(r: Row, doc: BookSyncDocument): HTMLElement {
+    const a = r.a;
+    const li = document.createElement('li');
+    li.className = 'anno-row';
+    li.dataset.id = a.id;
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'anno-go';
+    const chip = document.createElement('span');
+    chip.className = 'anno-chip';
+    if (a.kind === 'memo') chip.textContent = '✎';
+    else chip.style.background = COLORS[a.color].css;
+    const main = document.createElement('span');
+    main.className = 'anno-main';
+    const text = document.createElement('span');
+    text.className = 'anno-text';
+    text.textContent = rowText(a) || (a.kind === 'memo' ? '(空のメモ)' : kindLabel(a));
+    const meta = document.createElement('span');
+    meta.className = 'anno-page';
+    meta.textContent = `${formatPageLabel(r.index, doc.settings)} ・ ${kindLabel(a)}`;
+    main.append(text, meta);
+    go.append(chip, main);
+    go.addEventListener('click', () => jumpAndClose(r.index));
+    li.append(go);
+
+    if (a.kind === 'memo') {
+      const edit = document.createElement('button');
+      edit.type = 'button';
+      edit.textContent = '編集';
+      edit.addEventListener('click', () => deps.editMemo(a.id));
+      li.append(edit);
+    } else {
+      const sel = document.createElement('select');
+      sel.setAttribute('aria-label', '色を変える');
+      for (const c of COLOR_KEYS) {
+        const o = document.createElement('option');
+        o.value = c;
+        o.textContent = COLORS[c].label;
+        o.selected = c === a.color;
+        sel.append(o);
+      }
+      sel.addEventListener('change', () => {
+        doc.annotations = setAnnotationColor(doc.annotations, a.id, sel.value as AnnotationColor);
+        deps.commit();
+        renderAnnos();
+      });
+      li.append(sel);
+    }
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'danger';
+    del.textContent = '削除';
+    del.setAttribute('aria-label', `${kindLabel(a)}を削除`);
+    del.addEventListener('click', () => {
+      if (!confirm('この注釈を削除しますか?')) return;
+      doc.annotations = deleteAnnotation(doc.annotations, a.id);
+      deps.commit();
+      renderAnnos();
+    });
+    li.append(del);
+    return li;
+  }
+
+  /** 蛍光ペンの箇所の文字を、後から読み込んで行に反映する(文字データがあるPDFのみ) */
+  async function loadOcr(rows: Row[], q: string): Promise<void> {
+    const todo = rows.map((r) => r.a).filter((a) => a.kind !== 'memo' && !ocrCache.has(a.id));
+    if (todo.length === 0) return;
+    const my = ++annoEpoch;
+    const texts = await deps.ocrTexts(todo).catch(() => new Map<string, string | null>());
+    if (my !== annoEpoch) return;
+    for (const a of todo) ocrCache.set(a.id, texts.get(a.id) ?? null);
+    if (root.hidden || tab !== 'annos') return;
+    if (q !== '') {
+      renderAnnos(); // 検索中は、読み込んだ文字も検索の対象にして並べ直す
+      return;
+    }
+    for (const a of todo) {
+      const t = ocrCache.get(a.id);
+      const node = annoList.querySelector(`li[data-id="${CSS.escape(a.id)}"] .anno-text`);
+      if (node && t) node.textContent = t;
+    }
+  }
+
+  for (const c of [annoQ, annoType, annoColor, annoGroup]) c.addEventListener('input', renderAnnos);
+
+  const annoExportBtn = el<HTMLButtonElement>('anno-export');
+  const annoExportStatus = el('anno-export-status');
+  const annoExportLink = el<HTMLAnchorElement>('anno-export-link');
+  annoExportBtn.addEventListener('click', async () => {
+    annoExportLink.hidden = true;
+    annoExportBtn.disabled = true;
+    try {
+      const r = await deps.exportNotes((m) => (annoExportStatus.textContent = m));
+      annoExportStatus.textContent = r.message;
+      annoExportLink.href = r.url;
+      annoExportLink.hidden = false;
+    } catch (e) {
+      annoExportStatus.textContent = (e as Error).message;
+    } finally {
+      annoExportBtn.disabled = false;
+    }
+  });
+
   // ---- サムネイル ----
   const thumbGrid = el('thumb-grid');
   const urls = new Map<string, string>();
@@ -260,6 +444,7 @@ export function createNav(deps: NavDeps) {
     if (root.hidden) return;
     if (tab === 'jump') renderJump();
     else if (tab === 'named') renderNamed();
+    else if (tab === 'annos') renderAnnos();
     else renderThumbs();
   }
 
@@ -283,6 +468,8 @@ export function createNav(deps: NavDeps) {
     close();
     for (const u of urls.values()) URL.revokeObjectURL(u);
     urls.clear();
+    ocrCache.clear();
+    annoEpoch++;
     thumbGrid.replaceChildren();
   }
 

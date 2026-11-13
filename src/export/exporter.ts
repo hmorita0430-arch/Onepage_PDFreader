@@ -1,7 +1,8 @@
 import { ensureFolder, folderUrl, safeName, upsertFile } from '../drive/output';
 import { COLORS, annotationBounds, groupByPage, numberMemos, type PageSize } from '../model/annotations';
 import { groupAt } from '../model/layout';
-import { formatPageLabel, type LogicalPage } from '../model/pages';
+import { chapterTitleAt, visibleNamed } from '../model/named';
+import { findIndex, formatPageLabel, type LogicalPage } from '../model/pages';
 import type { Annotation, BookSyncDocument, NormRect } from '../model/types';
 import { buildMarkdown, type NoteItem, type NotePage } from './markdown';
 import { drawAnnotations } from './draw';
@@ -54,6 +55,8 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
   if (groups.size === 0) throw new Error('書き出せる注釈がありません(蛍光ペンやメモを付けてください)');
 
   const order = [...groups.keys()].sort((a, b) => a - b);
+  // 目次(名前つきページ)があれば、章ごとにまとめる
+  const chapters = visibleNamed(doc.namedPages, 'toc').map((n) => ({ title: n.title, index: findIndex(pages, n.page) }));
   const notePages: NotePage[] = [];
   const images: { name: string; blob: Blob }[] = [];
   let memoCount = 0;
@@ -91,7 +94,12 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
       highlightCount++;
       return { kind: 'highlight', colorLabel: COLORS[a.color].label, ocr: texts[h++] ?? null };
     });
-    notePages.push({ label: formatPageLabel(index, doc.settings), imagePath, items });
+    notePages.push({
+      label: formatPageLabel(index, doc.settings),
+      imagePath,
+      items,
+      ...(chapters.length > 0 ? { chapter: chapterTitleAt(chapters, index) } : {}),
+    });
   }
 
   const title = safeName(input.bookName.replace(/\.pdf$/i, ''));
@@ -111,6 +119,30 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
   await upsertFile('読書ノート.md', bookFolder, new Blob([markdown], { type: 'text/markdown' }), 'text/markdown', token, f);
 
   return { folderUrl: folderUrl(bookFolder), pageCount: notePages.length, memoCount, highlightCount };
+}
+
+/**
+ * 蛍光ペンの箇所の文字(OCRの文字データがあるときだけ)。注釈のIDごとに、文字または null(文字データなし)。
+ * ページごとにまとめて取り出す。
+ */
+export async function highlightTexts(
+  viewer: ExportViewer & { pageSize(pdfPage: number): Promise<PageSize> },
+  annos: readonly Annotation[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>();
+  const byPage = new Map<number, Annotation[]>();
+  for (const a of annos) {
+    if (a.kind === 'memo') continue;
+    const arr = byPage.get(a.page.pdfPage);
+    if (arr) arr.push(a);
+    else byPage.set(a.page.pdfPage, [a]);
+  }
+  for (const [pdfPage, list] of byPage) {
+    const size = await viewer.pageSize(pdfPage);
+    const texts = await viewer.textInRegions(pdfPage, list.map((a) => clip(annotationBounds(a, size))));
+    list.forEach((a, i) => out.set(a.id, texts[i] ?? null));
+  }
+  return out;
 }
 
 /** 文字の取り出し範囲を、元画像の内側に収める */

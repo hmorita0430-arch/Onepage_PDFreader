@@ -91,6 +91,19 @@ export class PageViewer {
     }
   }
 
+  /** PDFページ(見開き1枚)全体の大きさ(PDFの単位) */
+  async pageSize(pdfPage: number): Promise<Size> {
+    const pdf = this.pdf;
+    if (!pdf) return { w: 1, h: 1 };
+    const page = await pdf.getPage(pdfPage);
+    try {
+      const v = page.getViewport({ scale: 1 });
+      return { w: v.width, h: v.height };
+    } finally {
+      page.cleanup();
+    }
+  }
+
   /** 書き出し用: 指定範囲を、長辺が maxSide ピクセルになる大きさで描いたキャンバスを返す。 */
   async renderToCanvas(spec: ViewSpec, maxSide: number): Promise<{ canvas: HTMLCanvasElement; page: Size } | null> {
     const pdf = this.pdf;

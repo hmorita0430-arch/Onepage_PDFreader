@@ -31,7 +31,7 @@ import { countUnsynced, incomingChanges, mergeDocuments, positionPending, type I
 import { isSyncable, syncBook } from './sync/remote';
 import { createAnnotator } from './ui/annotate';
 import { createNav } from './ui/nav';
-import { exportNotes } from './export/exporter';
+import { exportNotes, highlightTexts } from './export/exporter';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
 import {
@@ -593,7 +593,11 @@ const nav = createNav({
     if (!doc) return;
     saveBookDocument(doc);
     markDirty();
+    annot.render();
   },
+  editMemo: (id) => annot.editMemo(id),
+  ocrTexts: (annos) => highlightTexts(viewer, annos),
+  exportNotes: (onProgress) => runExport(onProgress),
 });
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
@@ -608,6 +612,7 @@ const annot = createAnnotator(
       if (!doc) return;
       saveBookDocument(doc);
       markDirty();
+      nav.refresh();
     },
     onModeChange: (active) => {
       readerEl.classList.toggle('annotating', active);
@@ -630,6 +635,13 @@ $('open-ann').addEventListener('click', () => {
 
 attachGestures(stageEl, {
   ...annot.draw, // 描画ツールの使用中は、タップによるページ送りを行わない(O-4)
+  // 読書中の長押し(タッチ)で、その場にメモを置く。右クリック(マウス)で、メモ・蛍光ペンのメニューを出す
+  onLongPress: (x, y) => {
+    if (doc && !cropping && !annot.isActive() && !nav.isOpen()) annot.placeMemoAt(x, y);
+  },
+  onContextMenu: (x, y) => {
+    if (doc && !cropping && !nav.isOpen()) annot.openContextMenu(x, y);
+  },
   isZoomed: () => isZoomed(view),
   isCenter: (xf) => !doc || tapAction(xf, doc.settings.openDirection) === 'menu',
   onEdgeTap: (xf) => {
@@ -673,8 +685,24 @@ document.addEventListener('keydown', (e) => {
   }
   if (annot.isEditorOpen()) return; // メモの入力中。文字入力を妨げない
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement || e.target instanceof HTMLTextAreaElement) return;
+  // 元に戻す/やり直す(注釈ツールの使用中): Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z
+  if ((e.ctrlKey || e.metaKey) && annot.isActive()) {
+    const k = e.key.toLowerCase();
+    if (k === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      annot.undo();
+      return;
+    }
+    if (k === 'y' || (k === 'z' && e.shiftKey)) {
+      e.preventDefault();
+      annot.redo();
+      return;
+    }
+  }
   if (e.key === 'Escape') {
-    if (cropping) exitCrop(true);
+    if (annot.isMenuOpen()) annot.closeMenu();
+    else if (annot.isOneShot()) annot.cancelOneShot();
+    else if (cropping) exitCrop(true);
     else if (annot.isActive()) annot.exit();
     else setMenuVisible(false);
     return;
@@ -800,27 +828,36 @@ $('sync-now').addEventListener('click', () => {
 const exportBtn = $<HTMLButtonElement>('export-notes');
 const exportStatus = $('export-status');
 const exportLink = $<HTMLAnchorElement>('export-link');
-exportBtn.addEventListener('click', async () => {
-  if (!doc) return;
-  exportLink.hidden = true;
+
+/** 読書ノートを書き出す。設定画面と、注釈の一覧画面の両方から呼ぶ。失敗は例外(文言は利用者向け)。 */
+async function runExport(onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
+  if (!doc) throw new Error('本が開かれていません');
   const token = auth.currentToken();
   if (!token) {
-    exportStatus.textContent = 'ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。';
-    return;
+    throw new Error('ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。');
   }
-  exportBtn.disabled = true;
   try {
-    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress: (m) => (exportStatus.textContent = m) });
-    exportStatus.textContent = `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)`;
-    exportLink.href = r.folderUrl;
-    exportLink.hidden = false;
+    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress });
+    return { message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)`, url: r.folderUrl };
   } catch (e) {
     if (e instanceof AuthExpiredError) {
       auth.expire();
-      exportStatus.textContent = '接続が切れました。再接続してから、もう一度お試しください。';
-    } else {
-      exportStatus.textContent = (e as Error).message;
+      throw new Error('接続が切れました。再接続してから、もう一度お試しください。');
     }
+    throw e;
+  }
+}
+
+exportBtn.addEventListener('click', async () => {
+  exportLink.hidden = true;
+  exportBtn.disabled = true;
+  try {
+    const r = await runExport((m) => (exportStatus.textContent = m));
+    exportStatus.textContent = r.message;
+    exportLink.href = r.url;
+    exportLink.hidden = false;
+  } catch (e) {
+    exportStatus.textContent = (e as Error).message;
   } finally {
     exportBtn.disabled = false;
   }

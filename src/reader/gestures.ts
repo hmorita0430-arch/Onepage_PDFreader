@@ -7,10 +7,16 @@
  * - ズーム中のドラッグ: 表示位置の移動のみ。スワイプでのページ送りは行わない。
  * - ズームしていないときの横スワイプ: ページ送り。
  * - ピンチ、マウスホイール: ズーム。
+ * - 長押し(タッチ・ペン。約0.55秒、ほぼ動かさない): onLongPress(読書中にその場でメモを置くため)。
+ * - 右クリック(マウス): onContextMenu(メモ・蛍光ペンのメニューを出すため)。
  * - 注釈の描画ツールを使用中(drawActive)は、1本指(マウスの左ボタン)の操作を描画として通知し、
  *   タップによるページ送り・スワイプは行わない(O-4)。2本指のピンチ・移動、Shift+ドラッグでの移動は使える。
  */
 export interface GestureHandlers {
+  /** 長押し(タッチ・ペン)。座標は el の左上を原点とする */
+  onLongPress?(x: number, y: number): void;
+  /** 右クリック(マウス) */
+  onContextMenu?(x: number, y: number): void;
   /** 描画ツールの使用中か */
   drawActive?(): boolean;
   onDrawStart?(x: number, y: number): void;
@@ -34,6 +40,7 @@ const SWIPE_MIN = 50;
 const DOUBLE_TAP_MS = 300;
 const DOUBLE_TAP_DIST = 40;
 const CENTER_TAP_DELAY = 280;
+const LONG_PRESS_MS = 550;
 
 export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   const pts = new Map<number, { x: number; y: number }>();
@@ -43,6 +50,9 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   let lastCenterTap: { t: number; x: number; y: number } | null = null;
   let pending: ReturnType<typeof setTimeout> | undefined;
   let drawing = false;
+  let lastPointerType = '';
+  let longTimer: ReturnType<typeof setTimeout> | undefined;
+  let longFired = false;
 
   const rel = (e: { clientX: number; clientY: number }) => {
     const r = el.getBoundingClientRect();
@@ -80,7 +90,10 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   };
 
   el.addEventListener('pointerdown', (e) => {
+    lastPointerType = e.pointerType;
+    if (e.pointerType === 'mouse' && e.button !== 0) return; // 右・中ボタンは、描画やタップとして扱わない
     el.setPointerCapture(e.pointerId);
+    longFired = false;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) {
       gesture = { sx: e.clientX, sy: e.clientY, st: performance.now(), moved: false, multi: false };
@@ -89,8 +102,18 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
         drawing = true;
         const p = rel(e);
         h.onDrawStart?.(p.x, p.y);
+      } else if (e.pointerType !== 'mouse' && h.onLongPress) {
+        // 長押し: ほとんど動かさずに押し続けたら、その場の操作(メモ)にする
+        clearTimeout(longTimer);
+        longTimer = setTimeout(() => {
+          if (!gesture || gesture.moved || gesture.multi || pts.size !== 1) return;
+          longFired = true;
+          const r = el.getBoundingClientRect();
+          h.onLongPress?.(gesture.sx - r.left, gesture.sy - r.top);
+        }, LONG_PRESS_MS);
       }
     } else if (gesture) {
+      clearTimeout(longTimer);
       if (drawing) {
         drawing = false;
         const p = rel(e);
@@ -119,11 +142,18 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     }
     if (gesture.multi) return;
     if (drawing) {
-      const p = rel(e);
-      h.onDrawMove?.(p.x, p.y);
+      // 取りこぼした途中の点も使う(線がカクカクしないように)
+      const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+      for (const ev of coalesced.length > 0 ? coalesced : [e]) {
+        const p = rel(ev);
+        h.onDrawMove?.(p.x, p.y);
+      }
       return;
     }
-    if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > TAP_MAX_MOVE) gesture.moved = true;
+    if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > TAP_MAX_MOVE) {
+      gesture.moved = true;
+      clearTimeout(longTimer);
+    }
     if (gesture.moved && h.isZoomed()) h.onPan(e.clientX - prev.x, e.clientY - prev.y);
   });
 
@@ -133,6 +163,11 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     if (pts.size > 0 || !gesture) return;
     const g = gesture;
     gesture = null;
+    clearTimeout(longTimer);
+    if (longFired) {
+      longFired = false; // 長押しで処理済み。続くタップ・スワイプとしては扱わない
+      return;
+    }
     if (drawing) {
       drawing = false;
       const p = rel(e);
@@ -151,6 +186,15 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   };
   el.addEventListener('pointerup', (e) => end(e, false));
   el.addEventListener('pointercancel', (e) => end(e, true));
+
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault(); // ブラウザの標準メニューは出さない
+    // タッチの長押しでも発生するが、そちらは onLongPress で処理済みなので、マウスのときだけ通知する
+    if (lastPointerType === 'mouse' || lastPointerType === '') {
+      const p = rel(e);
+      h.onContextMenu?.(p.x, p.y);
+    }
+  });
 
   el.addEventListener(
     'wheel',
