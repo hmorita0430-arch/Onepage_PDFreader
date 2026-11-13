@@ -1,0 +1,10 @@
+{
+  "name": "見開きリーダー",
+  "short_name": "見開き",
+  "lang": "ja",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#1b1b1f",
+  "theme_color": "#1b1b1f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

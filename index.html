@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#1b1b1f" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <title>見開きリーダー</title>
+  </head>
+  <body>
+    <main id="start" class="screen">
+      <h1>見開きリーダー</h1>
+      <p class="lead">見開きで撮影したPDFを、1ページずつ読みやすく表示します。</p>
+
+      <button id="open-drive" class="primary" type="button">Googleドライブから開く</button>
+      <button id="open-local" class="secondary" type="button" hidden>端末のPDFを開く(開発用)</button>
+      <input id="local-input" type="file" accept="application/pdf" hidden />
+
+      <div id="progress" class="progress" hidden role="progressbar" aria-label="ダウンロードの進捗">
+        <div id="progress-bar"></div>
+      </div>
+      <p id="message" class="message" role="status"></p>
+
+      <p class="conn">
+        ドライブ: <span id="conn-start">未接続</span>
+        <button id="reconnect-start" class="link" type="button" hidden>再接続</button>
+      </p>
+    </main>
+
+    <div id="reader" class="reader" hidden>
+      <div id="stage" class="stage"></div>
+
+      <header id="topbar" class="bar top" hidden>
+        <button id="back" class="icon" type="button" aria-label="本を閉じる">←</button>
+        <span id="title" class="title"></span>
+        <span class="conn small">
+          <span id="conn-reader">未接続</span>
+          <button id="reconnect-reader" class="link" type="button" hidden>再接続</button>
+        </span>
+        <button id="open-settings" class="icon" type="button" aria-label="本の設定">⚙</button>
+      </header>
+
+      <footer id="bottombar" class="bar bottom" hidden>
+        <span id="page-label"></span>
+      </footer>
+
+      <aside id="settings" class="settings" hidden aria-label="本の設定">
+        <h2>本の設定</h2>
+        <label>開き方向
+          <select id="set-direction">
+            <option value="rtl">右開き(右ページが先)</option>
+            <option value="ltr">左開き(左ページが先)</option>
+          </select>
+        </label>
+        <label>分割位置 <output id="split-out"></output>
+          <input id="set-split" type="range" min="0.3" max="0.7" step="0.002" />
+        </label>
+        <label>1枚目(表紙など)
+          <select id="set-first">
+            <option value="both">左右とも本文</option>
+            <option value="R">右側だけ</option>
+            <option value="L">左側だけ</option>
+          </select>
+        </label>
+        <fieldset>
+          <legend>印刷ページ番号との対応</legend>
+          <label class="inline">通し番号 <input id="set-serial" type="number" min="1" inputmode="numeric" /></label>
+          <label class="inline">= 印刷p. <input id="set-printed" type="number" inputmode="numeric" /></label>
+          <button id="clear-printed" class="link" type="button">対応を消す</button>
+        </fieldset>
+        <button id="close-settings" class="primary" type="button">閉じる</button>
+      </aside>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
