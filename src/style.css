@@ -198,3 +198,13 @@ button.icon {
 .thumb img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: contain; background: #111; border-radius: 4px 4px 0 0; visibility: hidden; }
 .thumb.loaded img { visibility: visible; }
 .thumb span { padding: 2px 0 3px; text-align: center; }
+
+.sync-hint {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 40px; z-index: 3;
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 4px 4px 14px; border-radius: 22px; max-width: calc(100% - 16px);
+  background: var(--surface); border: 1px solid var(--accent); font-size: 0.85rem;
+}
+.sync-hint span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-hint button { min-height: 44px; min-width: 44px; border-radius: 22px; border: none; background: none; color: var(--accent); font: inherit; padding: 0 10px; }
+.reader.cropping .sync-hint { display: none; }

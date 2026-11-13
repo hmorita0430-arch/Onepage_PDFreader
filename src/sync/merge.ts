@@ -77,7 +77,7 @@ export function mergeDocuments(a: BookSyncDocument, b: BookSyncDocument): BookSy
   };
 }
 
-function diffItems(local: readonly Item[], base: readonly Item[]): number {
+export function diffItems(local: readonly Item[], base: readonly Item[]): number {
   const byId = new Map(base.map((x) => [x.id, x]));
   let n = 0;
   for (const x of local) {
@@ -89,13 +89,53 @@ function diffItems(local: readonly Item[], base: readonly Item[]): number {
 
 /**
  * 「未同期の件数」(G-3)。前回の同期で確定した内容(base)から、手元で増えた/変わった項目の数。
- * 数えるもの: 名前つきページ・注釈(1件ずつ)、変更した設定項目(1項目ずつ)、最後に読んだ位置(変わっていれば1件)。
+ * 数えるもの: 名前つきページ・注釈(1件ずつ)、変更した設定項目(1項目ずつ)。
+ * 最後に読んだ位置は、ページを送るたびに変わるため、画面に出す件数には含めない(includePosition: false)。
+ * 同期するかどうかの判断には含める(既定)。
  */
-export function countUnsynced(local: BookSyncDocument, base: BookSyncDocument | null): number {
+export function countUnsynced(
+  local: BookSyncDocument,
+  base: BookSyncDocument | null,
+  opts: { includePosition?: boolean } = {},
+): number {
+  const { includePosition = true } = opts;
   let n = diffItems(local.namedPages, base?.namedPages ?? []) + diffItems(local.annotations, base?.annotations ?? []);
   for (const [k, t] of Object.entries(local.settingsUpdatedAt)) {
     if (base?.settingsUpdatedAt[k as BookSettingsKey] !== t) n++;
   }
-  if (local.position && base?.position?.updatedAt !== local.position.updatedAt) n++;
+  if (includePosition && positionPending(local, base)) n++;
   return n;
+}
+
+/** 最後に読んだ位置が、前回の同期から変わっている(まだ送っていない) */
+export function positionPending(local: BookSyncDocument, base: BookSyncDocument | null): boolean {
+  return !!local.position && base?.position?.updatedAt !== local.position.updatedAt;
+}
+
+export interface Incoming {
+  namedPages: number;
+  annotations: number;
+  settings: number;
+  /** 他の端末の「最後に読んだ位置」の方が新しく、手元と違う */
+  position: boolean;
+  total: number;
+}
+
+/**
+ * 統合の結果(merged)のうち、他の端末から取り込んだ変更(手元に無い・手元より新しい項目)。
+ * 「他の端末の変更を取り込みました」の表示に使う。
+ */
+export function incomingChanges(local: BookSyncDocument, merged: BookSyncDocument): Incoming {
+  const namedPages = diffItems(merged.namedPages, local.namedPages);
+  const annotations = diffItems(merged.annotations, local.annotations);
+  let settings = 0;
+  for (const [k, t] of Object.entries(merged.settingsUpdatedAt)) {
+    if (local.settingsUpdatedAt[k as BookSettingsKey] !== t) settings++;
+  }
+  const position =
+    !!merged.position &&
+    merged.position.updatedAt > (local.position?.updatedAt ?? 0) &&
+    (merged.position.page.pdfPage !== local.position?.page.pdfPage ||
+      merged.position.page.side !== local.position?.page.side);
+  return { namedPages, annotations, settings, position, total: namedPages + annotations + settings + (position ? 1 : 0) };
 }

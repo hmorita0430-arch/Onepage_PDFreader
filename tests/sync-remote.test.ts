@@ -123,6 +123,57 @@ describe('syncBook', () => {
   });
 });
 
+describe('変更の確認(版が同じなら本体を読み込まない)', () => {
+  const counting = (d: ReturnType<typeof fakeDrive>) => {
+    const log: string[] = [];
+    const fn = (async (url: string, init?: RequestInit) => {
+      const u = new URL(url);
+      log.push(`${init?.method ?? 'GET'} ${u.pathname}${u.searchParams.get('alt') === 'media' ? ' (本体)' : ''}`);
+      return d.fn(url, init);
+    }) as unknown as typeof fetch;
+    return { fn, log };
+  };
+
+  it('版が前回と同じで、手元に送るものも無ければ、本体を読み込まずに終える', async () => {
+    const d = fakeDrive();
+    const local = mk('A', 'a', 100);
+    const first = await syncBook(local, 'tok', d.fn);
+    const c = counting(d);
+    const r = await syncBook(first.merged, 'tok', c.fn, { knownVersion: first.version });
+    expect(r.skipped).toBe(true);
+    expect(c.log.some((l) => l.includes('本体'))).toBe(false);
+    expect(c.log).toHaveLength(1); // 一覧の確認だけ
+  });
+
+  it('他の端末が更新して版が変わっていれば、取り込む', async () => {
+    const d = fakeDrive();
+    const first = await syncBook(mk('A', 'a', 100), 'tok', d.fn);
+    const other = await syncBook(mk('B', 'b', 200), 'tok', d.fn); // 別の端末が書き込む
+    expect(other.merged.namedPages).toHaveLength(2);
+    const r = await syncBook(first.merged, 'tok', d.fn, { knownVersion: first.version });
+    expect(r.skipped).toBe(false);
+    expect(r.merged.namedPages.map((x) => x.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('knownVersion を渡さなければ(未送信の変更があるとき)必ず統合・送信する', async () => {
+    const d = fakeDrive();
+    const first = await syncBook(mk('A', 'a', 100), 'tok', d.fn);
+    const local = { ...first.merged, namedPages: [...first.merged.namedPages, ...mk('新規', 'n', 300).namedPages] };
+    const r = await syncBook(local, 'tok', d.fn);
+    expect(r.skipped).toBe(false);
+    expect(r.uploaded).toBe(true);
+    expect(d.remoteDoc().namedPages).toHaveLength(2);
+  });
+
+  it('結果には同期後の版が含まれる', async () => {
+    const d = fakeDrive();
+    const r1 = await syncBook(mk('A', 'a', 1), 'tok', d.fn);
+    expect(r1.version).toBe('1');
+    const r2 = await syncBook({ ...r1.merged, namedPages: [...r1.merged.namedPages, ...mk('B', 'b', 2).namedPages] }, 'tok', d.fn);
+    expect(r2.version).toBe('2');
+  });
+});
+
 describe('parseRemote', () => {
   it('欠けた項目を補う', () => {
     const r = parseRemote({ schemaVersion: 1, bookId: 'x', settings: {} }, 'x');

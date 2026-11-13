@@ -50,6 +50,11 @@
       </header>
 
       <div id="sync-badge" class="sync-badge" role="status" aria-live="polite"></div>
+      <div id="sync-hint" class="sync-hint" hidden role="status">
+        <span id="sync-hint-text"></span>
+        <button id="sync-hint-go" type="button">移動</button>
+        <button id="sync-hint-close" type="button" aria-label="閉じる">✕</button>
+      </div>
 
       <footer id="bottombar" class="bar bottom" hidden>
         <span id="page-label"></span>
@@ -94,6 +99,11 @@
           <legend>ドライブとの同期</legend>
           <p id="sync-status-text" class="muted"></p>
           <button id="sync-now" class="secondary" type="button">今すぐ同期</button>
+          <label class="check">
+            <input id="set-autoreconnect" type="checkbox" />
+            接続が切れたあと、次の画面操作で自動的に再接続を試みる
+          </label>
+          <button id="disconnect" class="link" type="button">この端末の接続情報を消す</button>
         </fieldset>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>

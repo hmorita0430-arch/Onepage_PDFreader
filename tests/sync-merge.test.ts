@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countUnsynced, mergeDocuments, mergeItems, stableStringify } from '../src/sync/merge';
+import { countUnsynced, incomingChanges, mergeDocuments, mergeItems, positionPending, stableStringify } from '../src/sync/merge';
 import { addNamedPage, deleteNamedPage, renameNamedPage, visibleNamed } from '../src/model/named';
 import { jumpTarget, buildPageList } from '../src/model/pages';
 import { DEFAULT_SETTINGS, newBookSyncDocument, type BookSyncDocument, type HighlightRect, type NamedPage } from '../src/model/types';
@@ -123,6 +123,14 @@ describe('未同期の件数(G-3)', () => {
     });
     expect(countUnsynced(local, base)).toBe(3); // しおり1件 + 設定1項目 + 位置
   });
+  it('画面用の件数には、読書位置を含めない(ページを送るたびに変わるため)', () => {
+    const base = doc({ namedPages: [np('1', 'a', 10)] });
+    const readingOnly = doc({ ...base, position: { page: { pdfPage: 4, side: 'L' }, updatedAt: 99 } });
+    expect(countUnsynced(readingOnly, base)).toBe(1); // 同期の要否の判断には含める
+    expect(countUnsynced(readingOnly, base, { includePosition: false })).toBe(0); // 画面の件数には含めない
+    expect(positionPending(readingOnly, base)).toBe(true);
+    expect(positionPending(base, base)).toBe(false);
+  });
   it('編集・削除も1件として数える', () => {
     const base = doc({ namedPages: [np('1', 'a', 10)] });
     expect(countUnsynced(doc({ namedPages: renameNamedPage(base.namedPages, '1', 'b', 50) }), base)).toBe(1);
@@ -166,5 +174,46 @@ describe('ページジャンプ(N-2)', () => {
   it('整数以外は無効', () => {
     expect(jumpTarget(list, settings, 'serial', 1.5)).toBeNull();
     expect(jumpTarget(list, settings, 'serial', NaN)).toBeNull();
+  });
+});
+
+describe('他の端末から取り込んだ変更の検出', () => {
+  it('他の端末で足したしおりを数える。自分の分は数えない', () => {
+    const local = doc({ namedPages: [np('mine', '自分', 10)] });
+    const remote = doc({ namedPages: [np('theirs', '相手', 20)] });
+    const merged = mergeDocuments(local, remote);
+    const i = incomingChanges(local, merged);
+    expect(i.namedPages).toBe(1);
+    expect(i.total).toBe(1);
+  });
+
+  it('自分の方が新しい編集は、取り込みに数えない', () => {
+    const local = doc({ namedPages: [np('x', '自分の新しい題', 10, { updatedAt: 500 })] });
+    const remote = doc({ namedPages: [np('x', '相手の古い題', 10, { updatedAt: 200 })] });
+    expect(incomingChanges(local, mergeDocuments(local, remote)).total).toBe(0);
+  });
+
+  it('相手の方が新しい編集・削除は、取り込みに数える', () => {
+    const local = doc({ namedPages: [np('x', '題', 10)] });
+    const remote = doc({ namedPages: deleteNamedPage([np('x', '題', 10)], 'x', 900) });
+    expect(incomingChanges(local, mergeDocuments(local, remote)).namedPages).toBe(1);
+  });
+
+  it('設定は、相手が新しい項目だけを数える', () => {
+    const local = doc({ settings: { ...DEFAULT_SETTINGS, splitPosition: 0.4 }, settingsUpdatedAt: { splitPosition: 100, openDirection: 500 } });
+    const remote = doc({ settings: { ...DEFAULT_SETTINGS, splitPosition: 0.6 }, settingsUpdatedAt: { splitPosition: 300, openDirection: 200 } });
+    const i = incomingChanges(local, mergeDocuments(local, remote));
+    expect(i.settings).toBe(1); // splitPosition だけ相手が新しい
+  });
+
+  it('読書位置: 相手が新しく、別のページのときだけ true', () => {
+    const mine = doc({ position: { page: { pdfPage: 3, side: 'R' }, updatedAt: 100 } });
+    const ahead = doc({ position: { page: { pdfPage: 9, side: 'R' }, updatedAt: 200 } });
+    const samePage = doc({ position: { page: { pdfPage: 3, side: 'R' }, updatedAt: 200 } });
+    const older = doc({ position: { page: { pdfPage: 9, side: 'R' }, updatedAt: 50 } });
+    expect(incomingChanges(mine, mergeDocuments(mine, ahead)).position).toBe(true);
+    expect(incomingChanges(mine, mergeDocuments(mine, samePage)).position).toBe(false);
+    expect(incomingChanges(mine, mergeDocuments(mine, older)).position).toBe(false);
+    expect(incomingChanges(doc(), mergeDocuments(doc(), ahead)).position).toBe(true);
   });
 });

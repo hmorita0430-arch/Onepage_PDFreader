@@ -13,10 +13,10 @@ import {
   type Margins,
 } from './model/crop';
 import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown } from './model/layout';
-import { buildPageList, clampIndex, findIndex, regionOf, type LogicalPage } from './model/pages';
+import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapAction } from './model/tap';
-import type { BookSettings, BookSyncDocument, PageOverride } from './model/types';
+import type { BookSettings, BookSyncDocument, PageOverride, PageRef } from './model/types';
 import {
   deleteBook,
   getBlob,
@@ -27,7 +27,7 @@ import {
   storageInfo,
   touchBook,
 } from './offline/library';
-import { countUnsynced, mergeDocuments } from './sync/merge';
+import { countUnsynced, incomingChanges, mergeDocuments, positionPending, type Incoming } from './sync/merge';
 import { isSyncable, syncBook } from './sync/remote';
 import { createNav } from './ui/nav';
 import { attachGestures } from './reader/gestures';
@@ -83,7 +83,7 @@ let syncTimer: ReturnType<typeof setTimeout> | undefined;
 // ---------- 接続状態(G-3: 切れても読書は止めない) ----------
 
 const CONN_TEXT: Record<ConnectionState, string> = {
-  disconnected: '未接続',
+  disconnected: '未接続(読書は続けられます)',
   connected: '接続中',
   expired: '接続が切れました(読書は続けられます)',
 };
@@ -94,12 +94,18 @@ function renderConnection(state: ConnectionState): void {
     el.textContent = CONN_TEXT[state];
     el.classList.toggle('expired', state === 'expired');
   }
-  for (const id of ['reconnect-start', 'reconnect-reader']) $(id).hidden = state !== 'expired';
+  // 未接続でも「接続」ボタンを出す(以前は、切れた後にしか出なかった)
+  for (const id of ['reconnect-start', 'reconnect-reader']) {
+    const btn = $(id);
+    btn.hidden = state === 'connected' || !driveConfigured();
+    btn.textContent = state === 'expired' ? '再接続' : 'ドライブに接続';
+  }
 }
 auth.onChange(renderConnection);
 auth.onChange((state) => {
   renderSyncStatus();
   if (state === 'connected') void syncNow(); // 再接続したら、保留していた同期を再開する
+  if (state === 'expired') armAutoReconnect();
 });
 renderConnection(auth.state);
 
@@ -222,6 +228,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   index = doc.position ? findIndex(pages, doc.position.page) : 0; // N-1: 最後に読んだ位置から開く
   view = { ...RESET_VIEW };
   setMenuVisible(false);
+  armAutoReconnect();
   await renderCurrent();
 }
 
@@ -344,12 +351,35 @@ window.addEventListener('pagehide', flushPosition);
 
 const syncBadge = $('sync-badge');
 const syncText = $('sync-status-text');
+const syncHint = $('sync-hint');
+const syncHintText = $('sync-hint-text');
 
+/** 最後に、ドライブ上の最新の状態を確認できた時刻 */
+let lastCheckedAt: number | null = null;
+/** 直近の同期で何が起きたか(数秒だけ表示する) */
+let activityNote: string | null = null;
+let noteTimer: ReturnType<typeof setTimeout> | undefined;
+/** 前回の同期後のドライブ上の版。変わっていなければ、本体の読み込みを省く */
+let remoteVersion: string | undefined;
+let hintTimer: ReturnType<typeof setTimeout> | undefined;
+let hintTarget: PageRef | null = null;
+
+const hhmm = (t: number) => new Date(t).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+
+/** 画面に出す「未同期の件数」。読書位置は、ページを送るたびに変わるので含めない */
 function unsyncedCount(): number {
+  return doc && isSyncable(doc.bookId) ? countUnsynced(doc, base, { includePosition: false }) : 0;
+}
+
+/** 同期が必要かどうかの判断用(読書位置を含む) */
+function pendingTotal(): number {
   return doc && isSyncable(doc.bookId) ? countUnsynced(doc, base) : 0;
 }
 
-/** 未同期の件数と、同期の状態を常に表示する(G-3) */
+/**
+ * 同期の状態を、常に表示する(G-3)。
+ * 「最新」は、ドライブ上の状態を確認できた時刻を示す(自分の変更を送っただけでは「最新」とは言えないため)。
+ */
 function renderSyncStatus(): void {
   if (!doc || !isSyncable(doc.bookId)) {
     syncBadge.hidden = true;
@@ -359,14 +389,57 @@ function renderSyncStatus(): void {
   syncBadge.hidden = false;
   const n = unsyncedCount();
   const connected = auth.state === 'connected';
-  let text = syncing ? '同期中…' : n === 0 ? '同期済み' : `未同期 ${n}件`;
-  if (!syncing && n > 0 && !connected) text += '(接続待ち)';
+  let text: string;
+  if (syncing) text = '同期中…';
+  else if (n > 0) text = `未同期 ${n}件${connected ? '' : '(接続待ち)'}`;
+  else if (!connected) text = doc && positionPending(doc, base) ? '未接続(読書位置のみ未送信)' : '未接続(送っていない変更はありません)';
+  else text = lastCheckedAt ? `最新(${hhmm(lastCheckedAt)}に確認)` : '確認中…';
+  if (activityNote) text += ` ・ ${activityNote}`;
   if (syncError) text += ` ・ ${syncError}`;
   syncBadge.textContent = text;
   syncBadge.classList.toggle('pending', !syncing && n > 0);
   syncBadge.classList.toggle('error', Boolean(syncError));
-  syncText.textContent = `${text}。${connected ? '接続中です。' : '接続が切れています。「今すぐ同期」で再接続できます。'}`;
+  syncText.textContent = `${text}。${connected ? 'ドライブに接続中です。' : '接続が切れています。「ドライブに接続」または「今すぐ同期」で再開できます。'}`;
 }
+
+function setNote(text: string): void {
+  activityNote = text;
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => {
+    activityNote = null;
+    renderSyncStatus();
+  }, 8000);
+}
+
+function describeIncoming(i: Incoming): string {
+  const parts: string[] = [];
+  if (i.namedPages > 0) parts.push(`しおり・目次${i.namedPages}件`);
+  if (i.annotations > 0) parts.push(`注釈${i.annotations}件`);
+  if (i.settings > 0) parts.push(`設定${i.settings}項目`);
+  if (i.position) parts.push('読書位置');
+  return parts.join('、');
+}
+
+/** 他の端末で、より先(または別の場所)まで読んでいるとき、移動するか尋ねる(勝手には動かさない) */
+function showPositionHint(ref: PageRef): void {
+  if (!doc || pages.length === 0) return;
+  hintTarget = ref;
+  syncHintText.textContent = `他の端末の読書位置: ${formatPageLabel(findIndex(pages, ref), doc.settings)}`;
+  syncHint.hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(hideHint, 20000);
+}
+
+function hideHint(): void {
+  syncHint.hidden = true;
+  hintTarget = null;
+  clearTimeout(hintTimer);
+}
+$('sync-hint-go').addEventListener('click', () => {
+  if (hintTarget) go(findIndex(pages, hintTarget));
+  hideHint();
+});
+$('sync-hint-close').addEventListener('click', hideHint);
 
 /** 変更があった。表示を更新し、接続中なら少し待ってから同期する */
 function markDirty(): void {
@@ -380,14 +453,15 @@ function scheduleSync(delayMs: number): void {
   syncTimer = setTimeout(() => void syncNow(), delayMs);
 }
 
-/** 同期の結果を取り込む。同期中に手元で変えた分も、統合し直して取りこぼさない。 */
-function applyMerged(bookId: string, result: BookSyncDocument): void {
+/** 同期の結果を取り込む。同期中に手元で変えた分も、統合し直して取りこぼさない。取り込んだ変更を返す。 */
+function applyMerged(bookId: string, result: BookSyncDocument): Incoming {
   const local = doc && doc.bookId === bookId ? doc : loadBookDocument(bookId);
+  const incoming = incomingChanges(local, result);
   const settingsBefore = JSON.stringify(local.settings);
   const merged = mergeDocuments(local, result);
   saveBookDocument(merged);
   saveBase(result);
-  if (!doc || doc.bookId !== bookId) return;
+  if (!doc || doc.bookId !== bookId) return incoming;
   doc = merged;
   base = result;
   if (JSON.stringify(doc.settings) !== settingsBefore) {
@@ -395,12 +469,13 @@ function applyMerged(bookId: string, result: BookSyncDocument): void {
     if (pages.length > 0) rebuildPages();
   }
   nav.refresh();
+  return incoming;
 }
 
 async function syncNow(): Promise<void> {
   if (!doc || !isSyncable(doc.bookId)) return;
   const token = auth.currentToken();
-  if (!token) {
+  if (!token || !navigator.onLine) {
     renderSyncStatus(); // 接続が切れている間は保留し、件数を表示し続ける
     return;
   }
@@ -412,9 +487,24 @@ async function syncNow(): Promise<void> {
   syncError = null;
   renderSyncStatus();
   const bookId = doc.bookId;
+  const outgoing = unsyncedCount();
   try {
-    const result = await syncBook(doc, token);
-    applyMerged(bookId, result.merged);
+    // 手元に送るものが無く、ドライブ上も変わっていなければ、本体は読み込まない
+    const result = await syncBook(doc, token, fetch, { knownVersion: pendingTotal() === 0 ? remoteVersion : undefined });
+    remoteVersion = result.version;
+    lastCheckedAt = Date.now();
+    if (!result.skipped) {
+      const incoming = applyMerged(bookId, result.merged);
+      const parts: string[] = [];
+      if (result.uploaded && outgoing > 0) parts.push(`↑${outgoing}件を送信`);
+      if (incoming.total > 0) parts.push(`↓他の端末から ${describeIncoming(incoming)} を取り込み`);
+      if (parts.length > 0) setNote(parts.join(' / '));
+      const current = pages[index]?.ref;
+      const theirs = doc?.position?.page;
+      if (incoming.position && theirs && current && (theirs.pdfPage !== current.pdfPage || theirs.side !== current.side)) {
+        showPositionHint(theirs);
+      }
+    }
   } catch (e) {
     if (e instanceof AuthExpiredError) auth.expire();
     else syncError = '通信エラーで同期できませんでした';
@@ -422,9 +512,44 @@ async function syncNow(): Promise<void> {
     syncing = false;
     renderSyncStatus();
     // 同期中に増えた変更があれば、もう一度(エラー時は無限に繰り返さない)
-    if (!syncError && auth.currentToken() && (syncAgain || unsyncedCount() > 0)) scheduleSync(syncAgain ? 500 : 5000);
+    if (!syncError && auth.currentToken() && (syncAgain || pendingTotal() > 0)) scheduleSync(syncAgain ? 500 : 5000);
     syncAgain = false;
   }
+}
+
+// 他の端末の変更を「受け取る」ための確認: 一定間隔、画面に戻ったとき、ネットワークが戻ったとき
+const POLL_MS = 30_000;
+setInterval(() => {
+  if (document.visibilityState === 'visible' && doc && !cropping) void syncNow();
+}, POLL_MS);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void syncNow();
+});
+window.addEventListener('focus', () => void syncNow());
+window.addEventListener('online', () => void syncNow());
+
+// 接続が切れたあと、次の画面操作で自動的に再接続を試みる(ポップアップは操作の直後にしか開けないため)。
+// 失敗・キャンセルしても繰り返さない(「再接続」ボタンから行える)。
+const AUTO_RECONNECT_KEY = 'auto-reconnect:v1';
+const autoReconnectEnabled = (): boolean => {
+  try {
+    return localStorage.getItem(AUTO_RECONNECT_KEY) !== 'off';
+  } catch {
+    return true;
+  }
+};
+let autoArmed = false;
+function armAutoReconnect(): void {
+  if (autoArmed || !doc || !driveConfigured() || !autoReconnectEnabled() || auth.state !== 'expired') return;
+  autoArmed = true;
+  document.addEventListener(
+    'pointerdown',
+    () => {
+      autoArmed = false;
+      if (auth.state === 'expired') void auth.reconnect().catch(() => undefined);
+    },
+    { once: true },
+  );
 }
 
 // ---------- ページ移動・しおり・サムネイル(N-2, N-3, N-4) ----------
@@ -612,6 +737,20 @@ $('open-nav').addEventListener('click', () => {
 $('sync-now').addEventListener('click', () => {
   if (!auth.currentToken()) void onReconnect();
   else void syncNow();
+});
+const autoReconnectChk = $<HTMLInputElement>('set-autoreconnect');
+autoReconnectChk.checked = autoReconnectEnabled();
+autoReconnectChk.addEventListener('change', () => {
+  try {
+    localStorage.setItem(AUTO_RECONNECT_KEY, autoReconnectChk.checked ? 'on' : 'off');
+  } catch {
+    /* 保存できなくても、この回は反映される */
+  }
+});
+$('disconnect').addEventListener('click', () => {
+  if (!confirm('この端末に保存した、ドライブへの接続情報を消しますか?\n(しおりや設定、保存した本は消えません。再び使うには、もう一度接続します)')) return;
+  auth.disconnect();
+  renderSyncStatus();
 });
 $('close-settings').addEventListener('click', () => (settingsEl.hidden = true));
 $('back').addEventListener('click', closeBook);
@@ -810,6 +949,8 @@ async function refreshLibrary(): Promise<void> {
 
 openDriveBtn.addEventListener('click', () => void openFromDrive());
 void refreshLibrary();
+
+if (driveConfigured()) void auth.preload();
 
 if (!driveConfigured()) {
   openDriveBtn.disabled = true;

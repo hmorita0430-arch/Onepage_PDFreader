@@ -30,6 +30,18 @@ export interface SyncResult {
   /** ドライブ上に保存した(または既に同じだった)統合結果 */
   merged: BookSyncDocument;
   uploaded: boolean;
+  /** 同期後のドライブ上のファイルの版。次回の「変更の確認」に使う */
+  version: string;
+  /** ドライブ上が前回から変わっておらず、手元にも送るものが無かったため、読み込みを省いた */
+  skipped: boolean;
+}
+
+export interface SyncOptions {
+  /**
+   * 前回の同期後に分かっているドライブ上の版。これと同じで、かつ手元に送るものが無いときは、
+   * 本体を読み込まずに終える(定期的な確認の通信量を減らす)。手元に未送信の変更があるときは渡さない。
+   */
+  knownVersion?: string;
 }
 
 const MAX_ATTEMPTS = 3;
@@ -43,21 +55,27 @@ export async function syncBook(
   local: BookSyncDocument,
   token: string,
   f: typeof fetch = fetch,
+  opts: SyncOptions = {},
 ): Promise<SyncResult> {
   for (let attempt = 1; ; attempt++) {
     const file = await findBookFile(local.bookId, token, f);
+    if (file && opts.knownVersion !== undefined && file.version === opts.knownVersion) {
+      return { merged: local, uploaded: false, version: file.version, skipped: true };
+    }
     const remote = file ? parseRemote(await readJson(file.id, token, f), local.bookId) : null;
     const merged = remote ? mergeDocuments(local, remote) : local;
 
-    if (remote && stableStringify(merged) === stableStringify(remote)) return { merged, uploaded: false };
+    if (remote && file && stableStringify(merged) === stableStringify(remote)) {
+      return { merged, uploaded: false, version: file.version, skipped: false };
+    }
 
     if (file) {
       const current = await getVersion(file.id, token, f);
       if (current !== file.version && attempt < MAX_ATTEMPTS) continue; // 他端末が更新した。取り込み直す
-      await updateBookFile(file.id, merged, token, f);
-    } else {
-      await createBookFile(local.bookId, merged, token, f);
+      const updated = await updateBookFile(file.id, merged, token, f);
+      return { merged, uploaded: true, version: updated.version, skipped: false };
     }
-    return { merged, uploaded: true };
+    const created = await createBookFile(local.bookId, merged, token, f);
+    return { merged, uploaded: true, version: created.version, skipped: false };
   }
 }
