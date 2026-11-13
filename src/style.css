@@ -77,8 +77,9 @@ button.icon {
 @keyframes slide { from { margin-left: -40%; } to { margin-left: 100%; } }
 
 .reader { position: fixed; inset: 0; background: #000; touch-action: none; user-select: none; }
-.stage { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.stage canvas { display: block; }
+.stage { position: absolute; inset: 0 0 var(--panel-h, 0px) 0; overflow: hidden; }
+.page { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.page canvas { display: block; }
 
 .bar {
   position: absolute;
@@ -118,3 +119,40 @@ button.icon {
 .settings input[type="range"] { min-height: 44px; }
 .settings fieldset { border: 1px solid var(--muted); border-radius: 8px; margin: 0 0 16px; padding: 8px 12px; }
 .settings legend { color: var(--muted); font-size: 0.9rem; padding: 0 4px; }
+
+.settings label.check { display: flex; gap: 8px; align-items: flex-start; line-height: 1.4; }
+.settings label.check input { margin-top: 2px; width: 20px; height: 20px; flex: none; }
+.settings button.secondary { margin-bottom: 16px; }
+
+.muted { color: var(--muted); font-size: 0.9rem; line-height: 1.5; margin: 8px 0; }
+.library { margin-top: 28px; }
+.library h2 { font-size: 1.05rem; margin: 0 0 8px; }
+.library-list { list-style: none; margin: 0; padding: 0; }
+.library-list li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 0; border-bottom: 1px solid var(--surface);
+}
+.library-list .info { flex: 1; min-width: 0; }
+.library-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-list .sub { color: var(--muted); font-size: 0.8rem; }
+.library-list button { min-height: 44px; min-width: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--muted); background: transparent; }
+.library-list button.danger { color: var(--danger); border-color: var(--danger); }
+
+.crop-overlay { position: absolute; inset: 0; pointer-events: none; }
+.crop-overlay .shade { position: absolute; background: rgba(0, 0, 0, 0.62); }
+.crop-overlay .frame { position: absolute; border: 2px solid var(--accent); }
+
+.crop-panel {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: 8px 16px; padding-bottom: max(8px, env(safe-area-inset-bottom));
+  background: var(--surface); touch-action: manipulation;
+  max-height: 60vh; overflow-y: auto;
+}
+.crop-panel h2 { font-size: 0.95rem; margin: 0 0 4px; }
+.crop-panel h2 small { color: var(--muted); font-weight: normal; }
+.crop-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.crop-grid label { color: var(--muted); font-size: 0.85rem; }
+.crop-grid input[type="range"] { display: block; width: 100%; min-height: 36px; }
+.crop-actions { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.crop-actions button.primary, .crop-actions button.secondary { width: auto; margin: 0; flex: 1 1 10rem; }
+.crop-panel .message { min-height: 1.2em; margin: 4px 0 0; font-size: 0.85rem; }

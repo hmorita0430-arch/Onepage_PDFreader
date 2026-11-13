@@ -22,6 +22,13 @@
       </div>
       <p id="message" class="message" role="status"></p>
 
+      <section class="library" aria-labelledby="library-title">
+        <h2 id="library-title">端末に保存した本</h2>
+        <ul id="library-list" class="library-list"></ul>
+        <p id="library-empty" class="muted">まだありません。ドライブから開いた本は、自動で端末に保存されます。</p>
+        <p id="storage-info" class="muted"></p>
+      </section>
+
       <p class="conn">
         ドライブ: <span id="conn-start">未接続</span>
         <button id="reconnect-start" class="link" type="button" hidden>再接続</button>
@@ -63,6 +70,17 @@
             <option value="L">左側だけ</option>
           </select>
         </label>
+        <label>横長画面の表示
+          <select id="set-layout">
+            <option value="single">1ページ</option>
+            <option value="double">2ページ(撮影した見開きのまま)</option>
+          </select>
+        </label>
+        <label class="check">
+          <input id="set-zoomkeep" type="checkbox" />
+          ズーム維持(ページを送っても倍率と位置を引き継ぐ)
+        </label>
+        <button id="open-crop" class="secondary" type="button">余白を設定…</button>
         <fieldset>
           <legend>印刷ページ番号との対応</legend>
           <label class="inline">通し番号 <input id="set-serial" type="number" min="1" inputmode="numeric" /></label>
@@ -71,6 +89,23 @@
         </fieldset>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
+      <section id="crop-panel" class="crop-panel" hidden aria-label="余白の設定">
+        <h2>余白の設定 <small>(表示中のページで確認しながら)</small></h2>
+        <div class="crop-grid">
+          <label>上 <output id="crop-top-out"></output><input id="crop-top" type="range" min="0" max="0.4" step="0.005" /></label>
+          <label>下 <output id="crop-bottom-out"></output><input id="crop-bottom" type="range" min="0" max="0.4" step="0.005" /></label>
+          <label>左 <output id="crop-left-out"></output><input id="crop-left" type="range" min="0" max="0.4" step="0.005" /></label>
+          <label>右 <output id="crop-right-out"></output><input id="crop-right" type="range" min="0" max="0.4" step="0.005" /></label>
+        </div>
+        <div class="crop-actions">
+          <button id="crop-save-frame" class="primary" type="button">この本の共通枠にする</button>
+          <button id="crop-save-page" class="secondary" type="button">このページだけに適用</button>
+          <button id="crop-clear-page" class="link" type="button">このページの個別設定を消す</button>
+          <button id="crop-clear-frame" class="link" type="button">共通枠を消す</button>
+          <button id="crop-done" class="secondary" type="button">完了</button>
+        </div>
+        <p id="crop-msg" class="message" role="status"></p>
+      </section>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

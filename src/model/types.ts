@@ -41,7 +41,7 @@ export interface PageOverride {
   split?: boolean;
   /** このページだけの分割位置(0〜1) */
   splitPosition?: number;
-  /** ページ単位の余白調整(第2段階) */
+  /** ページ単位の余白調整。分割後のページ範囲に対する相対矩形(画面で見たままの向き) */
   crop?: NormRect;
 }
 
@@ -55,8 +55,11 @@ export interface BookSettings {
   printedNumber: { serial: number; printed: number } | null;
   landscapeLayout: 'single' | 'double'; // 第2段階
   zoomKeep: boolean; // 第2段階
-  cropFrame: NormRect | null; // 第2段階(本ごとの共通枠)
-  pageOverrides: Record<string, PageOverride>; // キーは pdfPage の文字列
+  /** 本ごとの共通枠。分割後のページ範囲に対する相対矩形。右ページ基準で持ち、左ページには左右反転で適用 */
+  cropFrame: NormRect | null;
+  /** キーは pdfPage の文字列(見開き1枚単位: split/splitPosition)。
+   *  ページ単位の余白(crop)だけは "<pdfPage>:<L|R|W>" をキーにする(左右で別々に持つため)。 */
+  pageOverrides: Record<string, PageOverride>;
 }
 
 export type BookSettingsKey = keyof BookSettings;
