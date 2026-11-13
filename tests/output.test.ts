@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AuthExpiredError } from '../src/drive/download';
-import { ensureFolder, folderUrl, safeName, upsertFile } from '../src/drive/output';
+import { DestinationError, ensureFolder, folderUrl, resolveOutputRoot, safeName, upsertFile } from '../src/drive/output';
 
 interface F { id: string; name: string; parent: string; mime: string; bytes: Uint8Array }
 
@@ -10,6 +10,7 @@ function fakeDrive() {
   let seq = 0;
   let status: number | null = null;
   const calls: string[] = [];
+  const metas = new Map<string, { mimeType: string; trashed?: boolean; capabilities?: { canAddChildren: boolean } }>();
   const fn = (async (url: string, init?: RequestInit) => {
     if (status) return new Response('', { status });
     const u = new URL(url);
@@ -23,6 +24,12 @@ function fakeDrive() {
       const wantFolder = q.includes("mimeType='application/vnd.google-apps.folder'");
       const hit = [...files.values()].find((f) => f.name === name && f.parent === parent && (f.mime === 'application/vnd.google-apps.folder') === wantFolder);
       return json({ files: hit ? [{ id: hit.id }] : [] });
+    }
+    if (u.pathname.startsWith('/drive/v3/files/') && m === 'GET') {
+      const id = decodeURIComponent(u.pathname.split('/').pop()!);
+      const meta = metas.get(id);
+      if (!meta) return new Response('', { status: 404 });
+      return json({ id, ...meta });
     }
     if (u.pathname === '/drive/v3/files' && m === 'POST') {
       const b = JSON.parse(String(init!.body));
@@ -61,7 +68,7 @@ function fakeDrive() {
     }
     return new Response('', { status: 400 });
   }) as unknown as typeof fetch;
-  return { fn, files, calls, fail: (s: number | null) => (status = s) };
+  return { fn, files, calls, metas, fail: (s: number | null) => (status = s) };
 }
 
 describe('ensureFolder', () => {
@@ -129,5 +136,56 @@ describe('補助', () => {
   });
   it('フォルダのURL', () => {
     expect(folderUrl('abc')).toBe('https://drive.google.com/drive/folders/abc');
+  });
+});
+
+describe('resolveOutputRoot(書き出し先の起点)', () => {
+  const FOLDER = 'application/vnd.google-apps.folder';
+
+  it('未設定なら、マイドライブ直下の「読書ノート」(無ければ作る・あれば再利用)', async () => {
+    const d = fakeDrive();
+    const a = await resolveOutputRoot(null, 'tok', d.fn);
+    const b = await resolveOutputRoot(null, 'tok', d.fn);
+    expect(b).toBe(a);
+    expect(d.files.get(a)).toMatchObject({ name: '読書ノート', parent: 'root' });
+  });
+
+  it('設定済みなら、そのフォルダをそのまま起点にする(別の「読書ノート」は作らない)', async () => {
+    const d = fakeDrive();
+    d.metas.set('DEST1', { mimeType: FOLDER, trashed: false, capabilities: { canAddChildren: true } });
+    expect(await resolveOutputRoot({ id: 'DEST1', name: 'マイノート' }, 'tok', d.fn)).toBe('DEST1');
+    expect([...d.files.values()].some((f) => f.name === '読書ノート')).toBe(false);
+  });
+
+  it('選んだフォルダの下に、本のフォルダ・画像フォルダを作れる', async () => {
+    const d = fakeDrive();
+    d.metas.set('DEST1', { mimeType: FOLDER });
+    const root = await resolveOutputRoot({ id: 'DEST1', name: 'マイノート' }, 'tok', d.fn);
+    const book = await ensureFolder('テスト本', root, 'tok', d.fn);
+    expect(d.files.get(book)!.parent).toBe('DEST1');
+  });
+
+  it('削除された・権限が無い(404/403)保存先は、利用者向けの案内つきで拒否する', async () => {
+    const d = fakeDrive();
+    await expect(resolveOutputRoot({ id: 'GONE', name: '消えた' }, 'tok', d.fn)).rejects.toBeInstanceOf(DestinationError);
+    await expect(resolveOutputRoot({ id: 'GONE', name: '消えた' }, 'tok', d.fn)).rejects.toThrow(/選び直すか「既定に戻す」/);
+  });
+
+  it('ごみ箱に入っている・フォルダではない・書き込み権限が無い保存先を拒否する', async () => {
+    const d = fakeDrive();
+    d.metas.set('TRASH', { mimeType: FOLDER, trashed: true });
+    d.metas.set('FILE', { mimeType: 'application/pdf' });
+    d.metas.set('RO', { mimeType: FOLDER, capabilities: { canAddChildren: false } });
+    await expect(resolveOutputRoot({ id: 'TRASH', name: 'T' }, 'tok', d.fn)).rejects.toThrow(/ごみ箱/);
+    await expect(resolveOutputRoot({ id: 'FILE', name: 'F' }, 'tok', d.fn)).rejects.toThrow(/フォルダではありません/);
+    await expect(resolveOutputRoot({ id: 'RO', name: 'R' }, 'tok', d.fn)).rejects.toThrow(/権限がありません/);
+  });
+
+  it('401 は接続切れ。その他の失敗は通常のエラー', async () => {
+    const d = fakeDrive();
+    d.fail(401);
+    await expect(resolveOutputRoot({ id: 'X', name: 'x' }, 'tok', d.fn)).rejects.toBeInstanceOf(AuthExpiredError);
+    d.fail(500);
+    await expect(resolveOutputRoot({ id: 'X', name: 'x' }, 'tok', d.fn)).rejects.toThrow(/HTTP 500/);
   });
 });

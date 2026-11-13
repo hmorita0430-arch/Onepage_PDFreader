@@ -1,4 +1,4 @@
-import { ensureFolder, folderUrl, safeName, upsertFile } from '../drive/output';
+import { DEFAULT_OUTPUT_FOLDER, ensureFolder, folderUrl, resolveOutputRoot, safeName, upsertFile, type ExportDestination } from '../drive/output';
 import { COLORS, annotationBounds, groupByPage, numberMemos, type PageSize } from '../model/annotations';
 import { groupAt } from '../model/layout';
 import { chapterTitleAt, visibleNamed } from '../model/named';
@@ -7,8 +7,8 @@ import type { Annotation, BookSyncDocument, NormRect } from '../model/types';
 import { buildMarkdown, type NoteItem, type NotePage } from './markdown';
 import { drawAnnotations } from './draw';
 
-/** 書き出し先のフォルダ名(要件定義書 8章の決定: 2026-11-13) */
-export const OUTPUT_FOLDER = '読書ノート';
+/** 既定の書き出し先のフォルダ名(要件定義書 8章の決定: 2026-11-13)。設定で別のフォルダを選べる。 */
+export const OUTPUT_FOLDER = DEFAULT_OUTPUT_FOLDER;
 /** 画像の長辺(ピクセル)。スマホで読めて、容量が大きくなりすぎない大きさ */
 const IMAGE_MAX_SIDE = 1800;
 
@@ -25,12 +25,16 @@ export interface ExportInput {
   viewer: ExportViewer;
   token: string;
   onProgress?: (message: string) => void;
+  /** 利用者が選んだ書き出し先。null/未指定なら、マイドライブ/読書ノート */
+  destination?: ExportDestination | null;
   now?: Date;
   fetchFn?: typeof fetch;
 }
 
 export interface ExportResult {
   folderUrl: string;
+  /** 保存した場所の表記(例: マイドライブ/読書ノート/本の名前) */
+  locationLabel: string;
   pageCount: number;
   memoCount: number;
   highlightCount: number;
@@ -107,7 +111,7 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
 
   say('ドライブにフォルダを用意しています');
   const f = input.fetchFn ?? fetch;
-  const root = await ensureFolder(OUTPUT_FOLDER, 'root', token, f);
+  const root = await resolveOutputRoot(input.destination ?? null, token, f);
   const bookFolder = await ensureFolder(title, root, token, f);
   const imagesFolder = await ensureFolder('images', bookFolder, token, f);
 
@@ -118,7 +122,8 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
   say('Markdownを保存しています');
   await upsertFile('読書ノート.md', bookFolder, new Blob([markdown], { type: 'text/markdown' }), 'text/markdown', token, f);
 
-  return { folderUrl: folderUrl(bookFolder), pageCount: notePages.length, memoCount, highlightCount };
+  const base = input.destination ? input.destination.name : `マイドライブ/${OUTPUT_FOLDER}`;
+  return { folderUrl: folderUrl(bookFolder), locationLabel: `${base}/${title}`, pageCount: notePages.length, memoCount, highlightCount };
 }
 
 /**

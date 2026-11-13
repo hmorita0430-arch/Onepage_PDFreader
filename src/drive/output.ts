@@ -83,6 +83,45 @@ export async function upsertFile(
 
 export const folderUrl = (id: string): string => `https://drive.google.com/drive/folders/${id}`;
 
+/** 利用者が選んだ保存先を使えない(消えた・権限が無い・フォルダではない等)。文言は利用者向け。 */
+export class DestinationError extends Error {}
+
+export interface ExportDestination {
+  id: string;
+  name: string;
+}
+
+/** 既定の保存先(マイドライブ直下)のフォルダ名 */
+export const DEFAULT_OUTPUT_FOLDER = '読書ノート';
+
+/**
+ * 書き出し先の起点フォルダのIDを返す。
+ * - 保存先が未設定なら、マイドライブ直下の「読書ノート」(無ければ作る)。
+ * - 設定済みなら、そのフォルダが今も使えるか(存在・ごみ箱・フォルダか・書き込み権限)を確かめる。
+ */
+export async function resolveOutputRoot(
+  dest: ExportDestination | null,
+  token: string,
+  f: Fetch = fetch,
+): Promise<string> {
+  if (!dest) return ensureFolder(DEFAULT_OUTPUT_FOLDER, 'root', token, f);
+  const hint = '設定で、保存先を選び直すか「既定に戻す」を押してください。';
+  const fields = encodeURIComponent('id,mimeType,trashed,capabilities(canAddChildren)');
+  const res = await f(`${API}/${encodeURIComponent(dest.id)}?fields=${fields}&supportsAllDrives=true`, { headers: auth(token) });
+  if (res.status === 401) throw new AuthExpiredError();
+  if (res.status === 404 || res.status === 403) {
+    throw new DestinationError(`保存先のフォルダ「${dest.name}」を開けません(削除された、または権限がありません)。${hint}`);
+  }
+  if (!res.ok) throw new Error(`保存先の確認に失敗しました(HTTP ${res.status})`);
+  const j = (await res.json()) as { id: string; mimeType?: string; trashed?: boolean; capabilities?: { canAddChildren?: boolean } };
+  if (j.trashed) throw new DestinationError(`保存先のフォルダ「${dest.name}」は、ごみ箱に入っています。${hint}`);
+  if (j.mimeType !== FOLDER) throw new DestinationError(`「${dest.name}」はフォルダではありません。${hint}`);
+  if (j.capabilities?.canAddChildren === false) {
+    throw new DestinationError(`保存先のフォルダ「${dest.name}」には、書き込む権限がありません。${hint}`);
+  }
+  return j.id;
+}
+
 /** ドライブのファイル名に使えない・紛らわしい文字を置き換える */
 export function safeName(name: string): string {
   return name.replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_').replace(/\s+/g, ' ').trim().slice(0, 100) || '無題';

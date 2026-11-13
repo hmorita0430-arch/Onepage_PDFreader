@@ -291,3 +291,14 @@ button.icon {
 .anno-text { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 .anno-page { color: var(--muted); font-size: 0.78rem; }
 .anno-export { margin-top: 20px; padding-top: 12px; border-top: 1px solid var(--surface); }
+
+.dest-row { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.dest-row button.secondary { flex: 1; margin: 0; }
+#export-dest, #anno-export-dest { color: var(--text); overflow-wrap: anywhere; }
+
+/* 狭い画面でも、上部バーのボタンが画面の外へ押し出されないようにする */
+.bar.top > * { flex: none; }
+.bar.top > .title { flex: 1 1 0; min-width: 0; }
+.bar.top > .conn.small { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; }
+.bar.top .conn.small > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar.top .conn.small button.link { flex: none; padding: 0 4px; }

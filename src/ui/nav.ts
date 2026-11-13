@@ -24,6 +24,10 @@ export interface NavDeps {
   ocrTexts(annos: Annotation[]): Promise<Map<string, string | null>>;
   /** 読書ノートをドライブへ書き出す */
   exportNotes(onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
+  /** 書き出し先の説明(例: マイドライブ/読書ノート/本の名前/(既定)) */
+  destinationLabel(): string;
+  /** 書き出し先のフォルダを、ドライブ上で選び直す。結果・失敗は report で知らせる */
+  chooseDestination(report: (message: string) => void): Promise<void>;
 }
 
 type Tab = 'jump' | 'named' | 'annos' | 'thumbs';
@@ -245,6 +249,7 @@ export function createNav(deps: NavDeps) {
       children.push(li);
     }
     annoList.replaceChildren(...children);
+    renderDest();
     void loadOcr(rows, q);
   }
 
@@ -333,6 +338,12 @@ export function createNav(deps: NavDeps) {
 
   for (const c of [annoQ, annoType, annoColor, annoGroup]) c.addEventListener('input', renderAnnos);
 
+  const annoDest = el('anno-export-dest');
+  const renderDest = () => (annoDest.textContent = deps.destinationLabel());
+  el('anno-dest-pick').addEventListener('click', () => {
+    annoExportLink.hidden = true;
+    void deps.chooseDestination((m) => (annoExportStatus.textContent = m)).then(renderDest, (e: Error) => (annoExportStatus.textContent = e.message));
+  });
   const annoExportBtn = el<HTMLButtonElement>('anno-export');
   const annoExportStatus = el('anno-export-status');
   const annoExportLink = el<HTMLAnchorElement>('anno-export-link');

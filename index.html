@@ -105,7 +105,12 @@
         </fieldset>
         <fieldset>
           <legend>注釈の書き出し</legend>
-          <p class="muted">蛍光ペン・メモを、注釈つきの画像とMarkdownにして、ドライブの「読書ノート」フォルダへ保存します。</p>
+          <p class="muted">蛍光ペン・メモを、注釈つきの画像とMarkdownにして、ドライブへ保存します。</p>
+          <p class="muted">保存先: <span id="export-dest"></span></p>
+          <div class="dest-row">
+            <button id="export-dest-pick" class="secondary" type="button">保存先を選ぶ…</button>
+            <button id="export-dest-reset" class="link" type="button" hidden>既定に戻す</button>
+          </div>
           <button id="export-notes" class="secondary" type="button">ドライブに書き出す</button>
           <p id="export-status" class="muted" role="status"></p>
           <a id="export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
@@ -184,7 +189,9 @@
           <p id="anno-count" class="muted"></p>
           <ul id="anno-list" class="anno-list"></ul>
           <div class="anno-export">
-            <button id="anno-export" class="primary" type="button">ドライブに書き出す(読書ノート)</button>
+            <p class="muted">保存先: <span id="anno-export-dest"></span>
+              <button id="anno-dest-pick" class="link" type="button">変更</button></p>
+            <button id="anno-export" class="primary" type="button">ドライブに書き出す</button>
             <p id="anno-export-status" class="muted" role="status"></p>
             <a id="anno-export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
           </div>

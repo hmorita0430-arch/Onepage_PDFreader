@@ -2,7 +2,7 @@ import './style.css';
 import { driveConfigured } from './config';
 import { DriveAuth, type ConnectionState } from './drive/auth';
 import { AuthExpiredError, downloadResumable, fetchFileInfo } from './drive/download';
-import { pickPdf } from './drive/picker';
+import { pickFolder, pickPdf } from './drive/picker';
 import {
   effectiveCrop,
   isFullRect,
@@ -31,6 +31,7 @@ import { countUnsynced, incomingChanges, mergeDocuments, positionPending, type I
 import { isSyncable, syncBook } from './sync/remote';
 import { createAnnotator } from './ui/annotate';
 import { createNav } from './ui/nav';
+import { clearDestination, describeDestination, loadDestination, saveDestination } from './export/destination';
 import { exportNotes, highlightTexts } from './export/exporter';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
@@ -95,17 +96,27 @@ const CONN_TEXT: Record<ConnectionState, string> = {
   expired: '接続が切れました(読書は続けられます)',
 };
 
+/** 上部バー用の短い表示(長いと、狭い画面でボタンが画面の外へ押し出される) */
+const CONN_TEXT_SHORT: Record<ConnectionState, string> = {
+  disconnected: '未接続',
+  connected: '接続中',
+  expired: '接続切れ',
+};
+
 function renderConnection(state: ConnectionState): void {
-  for (const id of ['conn-start', 'conn-reader']) {
-    const el = $(id);
-    el.textContent = CONN_TEXT[state];
-    el.classList.toggle('expired', state === 'expired');
-  }
+  const start = $('conn-start');
+  start.textContent = CONN_TEXT[state];
+  start.classList.toggle('expired', state === 'expired');
+  const bar = $('conn-reader');
+  bar.textContent = CONN_TEXT_SHORT[state];
+  bar.title = CONN_TEXT[state]; // 長押し・ホバーで詳しい説明
+  bar.classList.toggle('expired', state === 'expired');
   // 未接続でも「接続」ボタンを出す(以前は、切れた後にしか出なかった)
   for (const id of ['reconnect-start', 'reconnect-reader']) {
     const btn = $(id);
     btn.hidden = state === 'connected' || !driveConfigured();
-    btn.textContent = state === 'expired' ? '再接続' : 'ドライブに接続';
+    // 上部バーでは短く(「接続」「再接続」)、開始画面では分かりやすく(「ドライブに接続」)
+    btn.textContent = state === 'expired' ? '再接続' : id === 'reconnect-reader' ? '接続' : 'ドライブに接続';
   }
 }
 auth.onChange(renderConnection);
@@ -598,6 +609,8 @@ const nav = createNav({
   editMemo: (id) => annot.editMemo(id),
   ocrTexts: (annos) => highlightTexts(viewer, annos),
   exportNotes: (onProgress) => runExport(onProgress),
+  destinationLabel: () => describeDestination(exportDest),
+  chooseDestination: (report) => chooseDestination(report),
 });
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
@@ -829,6 +842,30 @@ const exportBtn = $<HTMLButtonElement>('export-notes');
 const exportStatus = $('export-status');
 const exportLink = $<HTMLAnchorElement>('export-link');
 
+/** 書き出し先(アプリ全体で1つ。この端末内に保存)。null なら既定のマイドライブ/読書ノート */
+let exportDest = loadDestination();
+
+function renderExportDest(): void {
+  $('export-dest').textContent = describeDestination(exportDest);
+  $('export-dest-reset').hidden = exportDest === null;
+  nav.refresh();
+}
+
+/**
+ * ドライブの標準ピッカーで、書き出し先のフォルダを選ぶ。選ぶことで、このアプリにそのフォルダへの書き込みを許可する。
+ * 操作の直後に呼ぶこと(接続のポップアップを開くため)。
+ */
+async function chooseDestination(report: (message: string) => void): Promise<void> {
+  if (!navigator.onLine) throw new Error('オフラインです。接続してから、保存先を選んでください。');
+  const token = await auth.ensureToken();
+  const picked = await pickFolder(token);
+  if (!picked) return; // キャンセル。今の保存先のまま
+  exportDest = { id: picked.id, name: picked.name };
+  saveDestination(exportDest);
+  renderExportDest();
+  report(`保存先を「${picked.name}」にしました。次の書き出しから、この中の「本の名前」フォルダに保存します。`);
+}
+
 /** 読書ノートを書き出す。設定画面と、注釈の一覧画面の両方から呼ぶ。失敗は例外(文言は利用者向け)。 */
 async function runExport(onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
   if (!doc) throw new Error('本が開かれていません');
@@ -837,16 +874,31 @@ async function runExport(onProgress: (message: string) => void): Promise<{ messa
     throw new Error('ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。');
   }
   try {
-    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress });
-    return { message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)`, url: r.folderUrl };
+    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress, destination: exportDest });
+    return {
+      message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)。保存先: ${r.locationLabel}`,
+      url: r.folderUrl,
+    };
   } catch (e) {
     if (e instanceof AuthExpiredError) {
       auth.expire();
       throw new Error('接続が切れました。再接続してから、もう一度お試しください。');
     }
-    throw e;
+    throw e; // DestinationError(保存先を使えない)も、利用者向けの文言のまま伝える
   }
 }
+
+$('export-dest-pick').addEventListener('click', () => {
+  exportLink.hidden = true;
+  chooseDestination((m) => (exportStatus.textContent = m)).catch((e: Error) => (exportStatus.textContent = e.message));
+});
+$('export-dest-reset').addEventListener('click', () => {
+  clearDestination();
+  exportDest = null;
+  renderExportDest();
+  exportStatus.textContent = '保存先を既定(マイドライブ/読書ノート)に戻しました。';
+});
+renderExportDest();
 
 exportBtn.addEventListener('click', async () => {
   exportLink.hidden = true;
