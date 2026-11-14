@@ -73,6 +73,25 @@ describe('統合: 位置と設定', () => {
     expect(m.settingsUpdatedAt).toEqual({ splitPosition: 300, openDirection: 100, firstPage: 400 });
   });
 
+  it('左右の余白の枠は、別々の項目として、項目ごとに新しい方(右の枠と左の枠が別々の端末で変わっても両方残る)', () => {
+    const right = { x: 0.2, y: 0.1, w: 0.8, h: 0.9 };
+    const left = { x: 0.05, y: 0, w: 0.85, h: 1 };
+    const a = doc({ settings: { ...DEFAULT_SETTINGS, cropFrame: right }, settingsUpdatedAt: { cropFrame: 100 } });
+    const b = doc({ settings: { ...DEFAULT_SETTINGS, cropFrameLeft: left }, settingsUpdatedAt: { cropFrameLeft: 200 } });
+    const m = mergeDocuments(a, b);
+    expect(m.settings.cropFrame).toEqual(right);
+    expect(m.settings.cropFrameLeft).toEqual(left);
+    expect(mergeDocuments(b, a).settings).toEqual(m.settings); // 順序に依らない
+  });
+
+  it('左の枠を消した(null)操作も、新しければ伝わる', () => {
+    const left = { x: 0.05, y: 0, w: 0.85, h: 1 };
+    const a = doc({ settings: { ...DEFAULT_SETTINGS, cropFrameLeft: left }, settingsUpdatedAt: { cropFrameLeft: 100 } });
+    const b = doc({ settings: { ...DEFAULT_SETTINGS, cropFrameLeft: null }, settingsUpdatedAt: { cropFrameLeft: 200 } });
+    expect(mergeDocuments(a, b).settings.cropFrameLeft).toBeNull();
+    expect(mergeDocuments(b, a).settings.cropFrameLeft).toBeNull();
+  });
+
   it('別の本は統合しない', () => {
     expect(() => mergeDocuments(doc(), { ...doc(), bookId: 'other' })).toThrow();
   });

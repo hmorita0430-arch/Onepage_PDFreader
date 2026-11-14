@@ -5,6 +5,7 @@ import { AuthExpiredError, downloadResumable, fetchFileInfo } from './drive/down
 import { pickFolder, pickPdf } from './drive/picker';
 import {
   effectiveCrop,
+  FULL_RECT,
   isFullRect,
   marginsToRect,
   mirrorRect,
@@ -26,7 +27,7 @@ import { formatShownLabel, isLastPage, groupAt, nextIndex, normalizeIndex, prevI
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapZone } from './model/tap';
-import type { BookSettings, BookSyncDocument, PageOverride, PageRef } from './model/types';
+import type { BookSettings, BookSyncDocument, NormRect, PageOverride, PageRef } from './model/types';
 import {
   deleteBook,
   getBlob,
@@ -1233,9 +1234,25 @@ function setMargins(m: Margins): void {
   updateCropOverlay();
 }
 
+/** 表示中のページの側(左/右)に合わせて、見出しとボタンの文言を更新する */
+function updateCropSideText(): void {
+  const side = pages[index]?.ref.side;
+  const name = side === 'L' ? '左ページ' : '右ページ';
+  const other = side === 'L' ? '右ページ' : '左ページ';
+  $('crop-side').textContent =
+    side === 'W'
+      ? 'いま編集: 分割しない1ページ(右ページ用の枠を使います)'
+      : `いま編集: ${name}用の共通枠${side === 'L' && !doc?.settings.cropFrameLeft && doc?.settings.cropFrame ? '(未設定のため、右ページ用を反転して使っています)' : ''}`;
+  $('crop-save-frame').textContent = side === 'L' ? '左ページ用の共通枠にする' : '右ページ用の共通枠にする';
+  $('crop-clear-frame').textContent = side === 'L' ? '左ページ用の共通枠を消す' : '右ページ用の共通枠を消す';
+  $('crop-copy-mirror').textContent = `${other}用にもコピー(反転)`;
+  $('crop-copy-mirror').hidden = side === 'W';
+}
+
 function updateCropOverlay(): void {
   cropOverlay.hidden = !cropping;
   if (!cropping) return;
+  updateCropSideText();
   const m = readMargins();
   const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
   for (const s of SIDES) cropOut(s).textContent = `${(m[s] * 100).toFixed(1)}%`;
@@ -1278,18 +1295,37 @@ function currentCropRect() {
   return marginsToRect(readMargins());
 }
 
+/** 表示中のページの側の共通枠として保存する(左ページ=左用、右ページ・1ページ=右用) */
+function setFrameForSide(side: 'L' | 'R', rect: NormRect): void {
+  if (side === 'L') {
+    // 左用は、枠なしも「枠を削らない」と明示して持つ(null だと、右用の反転に戻るため)
+    updateSetting('cropFrameLeft', isFullRect(rect) ? FULL_RECT : rect);
+  } else {
+    updateSetting('cropFrame', isFullRect(rect) ? null : rect);
+  }
+}
+
 function saveCropFrame(): void {
   const page = pages[index];
   if (!doc || !page) return;
+  const side = page.ref.side === 'L' ? 'L' : 'R';
   const rect = currentCropRect();
-  if (isFullRect(rect)) {
-    updateSetting('cropFrame', null);
-    cropMsg.textContent = '余白を削らない設定(共通枠なし)にしました';
-    return;
-  }
-  // 共通枠は右ページ基準で持つ。左ページで設定したときは左右を反転して保存する
-  updateSetting('cropFrame', page.ref.side === 'L' ? mirrorRect(rect) : rect);
-  cropMsg.textContent = 'この本の共通枠として保存しました(左ページには左右反転で適用されます)';
+  setFrameForSide(side, rect);
+  const name = side === 'L' ? '左ページ用' : '右ページ用';
+  cropMsg.textContent = isFullRect(rect) ? `${name}は、余白を削らない設定にしました` : `${name}の共通枠として保存しました`;
+  updateCropSideText();
+}
+
+/** いまの枠を、表示中の側に保存し、反対側には左右反転して保存する */
+function copyFrameMirrored(): void {
+  const page = pages[index];
+  if (!doc || !page || page.ref.side === 'W') return;
+  const side = page.ref.side === 'L' ? 'L' : 'R';
+  const rect = currentCropRect();
+  setFrameForSide(side, rect);
+  setFrameForSide(side === 'L' ? 'R' : 'L', mirrorRect(rect));
+  cropMsg.textContent = `左右の共通枠として保存しました(${side === 'L' ? '右' : '左'}ページ用には左右反転した枠)`;
+  updateCropSideText();
 }
 
 function updatePageOverride(fn: (cur: PageOverride) => PageOverride | null): void {
@@ -1319,11 +1355,17 @@ $('crop-clear-page').addEventListener('click', () => {
   if (doc && page) setMargins(rectToMargins(effectiveCrop(page.ref, doc.settings)));
   cropMsg.textContent = 'このページの個別設定を消しました(共通枠に戻ります)';
 });
+$('crop-copy-mirror').addEventListener('click', copyFrameMirrored);
 $('crop-clear-frame').addEventListener('click', () => {
-  updateSetting('cropFrame', null);
   const page = pages[index];
+  const left = page?.ref.side === 'L';
+  // 左ページ用を消すと、右ページ用を反転して使う状態(未設定)に戻る。右ページ用を消すと、右は余白を削らない
+  updateSetting(left ? 'cropFrameLeft' : 'cropFrame', null);
   if (doc && page) setMargins(rectToMargins(effectiveCrop(page.ref, doc.settings)));
-  cropMsg.textContent = '共通枠を消しました';
+  cropMsg.textContent = left
+    ? '左ページ用の共通枠を消しました(右ページ用があれば、反転して使います)'
+    : '右ページ用の共通枠を消しました';
+  updateCropSideText();
 });
 $('crop-done').addEventListener('click', () => exitCrop(true));
 

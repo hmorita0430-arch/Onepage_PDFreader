@@ -55,8 +55,10 @@ export interface BookSettings {
   printedNumber: { serial: number; printed: number } | null;
   landscapeLayout: 'single' | 'double'; // 第2段階
   zoomKeep: boolean; // 第2段階
-  /** 本ごとの共通枠。分割後のページ範囲に対する相対矩形。右ページ基準で持ち、左ページには左右反転で適用 */
+  /** 本ごとの共通枠(右ページ用。分割しない1ページ=Wも使う)。分割後のページ範囲に対する相対矩形で、画面で見たままの向き */
   cropFrame: NormRect | null;
+  /** 左ページ用の共通枠(画面で見たままの向き)。null=未設定: 右ページ用を左右反転して使う(従来の動き) */
+  cropFrameLeft: NormRect | null;
   /** キーは pdfPage の文字列(見開き1枚単位: split/splitPosition)。
    *  ページ単位の余白(crop)だけは "<pdfPage>:<L|R|W>" をキーにする(左右で別々に持つため)。 */
   pageOverrides: Record<string, PageOverride>;
@@ -72,6 +74,7 @@ export const DEFAULT_SETTINGS: BookSettings = {
   landscapeLayout: 'single',
   zoomKeep: false,
   cropFrame: null,
+  cropFrameLeft: null,
   pageOverrides: {},
 };
 

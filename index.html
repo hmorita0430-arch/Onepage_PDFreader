@@ -315,6 +315,7 @@
 
       <section id="crop-panel" class="crop-panel" hidden aria-label="余白の設定">
         <h2>余白の設定 <small>(表示中のページで確認しながら)</small></h2>
+        <p id="crop-side" class="crop-side" role="status"></p>
         <div class="crop-grid">
           <label>上 <output id="crop-top-out"></output><input id="crop-top" type="range" min="0" max="0.4" step="0.005" /></label>
           <label>下 <output id="crop-bottom-out"></output><input id="crop-bottom" type="range" min="0" max="0.4" step="0.005" /></label>
@@ -323,6 +324,7 @@
         </div>
         <div class="crop-actions">
           <button id="crop-save-frame" class="primary" type="button">この本の共通枠にする</button>
+          <button id="crop-copy-mirror" class="secondary" type="button">反対側にもコピー(反転)</button>
           <button id="crop-save-page" class="secondary" type="button">このページだけに適用</button>
           <button id="crop-clear-page" class="link" type="button">このページの個別設定を消す</button>
           <button id="crop-clear-frame" class="link" type="button">共通枠を消す</button>

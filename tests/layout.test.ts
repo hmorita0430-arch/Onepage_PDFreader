@@ -25,6 +25,49 @@ describe('余白トリミング(D-5)', () => {
     expect(effectiveCrop({ pdfPage: 2, side: 'R' }, settings)).toEqual(frame);
   });
 
+  it('左ページ用の枠を設定すると、右ページ用の反転ではなく、その枠を使う(右は変わらない)', () => {
+    const left = { x: 0.02, y: 0.1, w: 0.7, h: 0.8 };
+    const settings = s({ cropFrame: frame, cropFrameLeft: left });
+    expect(effectiveCrop({ pdfPage: 1, side: 'L' }, settings)).toEqual(left);
+    expect(effectiveCrop({ pdfPage: 1, side: 'R' }, settings)).toEqual(frame);
+  });
+
+  it('左ページ用が未設定(null)の本は、従来どおり、右ページ用の反転(既存の本の見た目は変わらない)', () => {
+    const asym = { x: 0.2, y: 0, w: 0.7, h: 1 };
+    const before = effectiveCrop({ pdfPage: 3, side: 'L' }, s({ cropFrame: asym }));
+    expect(before).toEqual(mirrorRect(asym));
+    expect(effectiveCrop({ pdfPage: 3, side: 'L' }, s({ cropFrame: asym, cropFrameLeft: null }))).toEqual(before);
+  });
+
+  it('左ページ用だけを設定しても、右ページは枠なし', () => {
+    const left = { x: 0.05, y: 0, w: 0.8, h: 1 };
+    const settings = s({ cropFrameLeft: left });
+    expect(effectiveCrop({ pdfPage: 1, side: 'L' }, settings)).toEqual(left);
+    expect(effectiveCrop({ pdfPage: 1, side: 'R' }, settings)).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+  });
+
+  it('左ページ用に「全体」を明示すると、右ページ用があっても、左は削らない', () => {
+    const settings = s({ cropFrame: frame, cropFrameLeft: { x: 0, y: 0, w: 1, h: 1 } });
+    expect(effectiveCrop({ pdfPage: 1, side: 'L' }, settings)).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+  });
+
+  it('分割しない1ページ(W)は、右ページ用の枠を使う', () => {
+    const settings = s({ cropFrame: frame, cropFrameLeft: { x: 0.3, y: 0, w: 0.5, h: 1 } });
+    expect(effectiveCrop({ pdfPage: 1, side: 'W' }, settings)).toEqual(frame);
+  });
+
+  it('「反対側にコピー(反転)」: 反転した枠を左用に持つと、左右は鏡像になる', () => {
+    const f = { x: 0.2, y: 0.05, w: 0.7, h: 0.9 };
+    const settings = s({ cropFrame: f, cropFrameLeft: mirrorRect(f) });
+    expect(effectiveCrop({ pdfPage: 1, side: 'L' }, settings)).toEqual(mirrorRect(f));
+  });
+
+  it('ページ単位の調整は、左右別の共通枠よりも優先される', () => {
+    const own = { x: 0.3, y: 0, w: 0.6, h: 1 };
+    const settings = s({ cropFrame: frame, cropFrameLeft: { x: 0, y: 0.2, w: 1, h: 0.6 }, pageOverrides: { [pageCropKey({ pdfPage: 2, side: 'L' })]: { crop: own } } });
+    expect(effectiveCrop({ pdfPage: 2, side: 'L' }, settings)).toEqual(own);
+  });
+
   it('枠が無ければ全体', () => {
     expect(effectiveCrop({ pdfPage: 1, side: 'R' }, s())).toEqual({ x: 0, y: 0, w: 1, h: 1 });
   });

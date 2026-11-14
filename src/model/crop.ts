@@ -3,8 +3,10 @@ import type { BookSettings, NormRect, PageRef } from './types';
 
 /**
  * 余白のトリミング(D-5)。
- * - 本ごとの共通枠 BookSettings.cropFrame は「右ページ(綴じ目が左側)」基準で持ち、
- *   左ページには左右を反転して適用する(綴じ側・小口側の余白は見開きで対称なため)。
+ * - 本ごとの共通枠は、右ページ用 BookSettings.cropFrame(分割しない1ページ=Wも使う)と、
+ *   左ページ用 BookSettings.cropFrameLeft の2つ。どちらも画面で見たままの向きで持つ。
+ *   左ページ用が未設定(null)の間は、右ページ用を左右反転して左ページに使う
+ *   (綴じ側・小口側の余白は見開きで対称なため。第1回〜の従来の動き)。
  * - ページ単位の調整は pageOverrides["<pdfPage>:<L|R|W>"].crop に、
  *   画面で見たままの向き(反転なし)で持つ。
  * - どちらも「分割後のページ範囲」に対する相対矩形(0〜1)。
@@ -30,9 +32,16 @@ export function pageCropKey(ref: PageRef): string {
 export function effectiveCrop(ref: PageRef, settings: BookSettings): NormRect {
   const own = settings.pageOverrides[pageCropKey(ref)]?.crop;
   if (own) return own;
-  const frame = settings.cropFrame;
-  if (!frame) return FULL_RECT;
-  return ref.side === 'L' ? mirrorRect(frame) : frame;
+  return commonFrame(ref.side, settings);
+}
+
+/** 共通枠(ページ単位の個別設定は含まない)。画面で見たままの向き */
+export function commonFrame(side: PageRef['side'], settings: BookSettings): NormRect {
+  if (side === 'L') {
+    if (settings.cropFrameLeft) return settings.cropFrameLeft;
+    return settings.cropFrame ? mirrorRect(settings.cropFrame) : FULL_RECT;
+  }
+  return settings.cropFrame ?? FULL_RECT;
 }
 
 export function applyCrop(region: NormRect, crop: NormRect): NormRect {

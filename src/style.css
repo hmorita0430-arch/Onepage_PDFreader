@@ -358,3 +358,5 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 .date-row button { width: auto; margin: 0; padding: 0 12px; white-space: nowrap; }
 .settings input[type="date"] { min-height: 44px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--muted); border-radius: 8px; padding: 0 8px; max-width: 100%; }
 .settings p.error { color: var(--danger); margin: 4px 0; font-size: 0.85rem; }
+
+.crop-side { margin: 0 0 8px; font-size: 0.9rem; color: var(--muted); }
