@@ -315,3 +315,7 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 
 /* 横方向の動きは、スワイプで閉じる操作のために、ブラウザに奪わせない(縦スクロールは今までどおり) */
 .settings { touch-action: pan-y; }
+
+/* 下バー: ページ番号の下に、全幅のスライダー(メニューを出したときだけ) */
+.bar.bottom { flex-direction: column; align-items: stretch; gap: 0; text-align: center; }
+.bar.bottom #page-slider { width: 100%; min-height: 44px; margin: 0; }

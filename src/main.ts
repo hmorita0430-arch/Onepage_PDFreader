@@ -67,6 +67,7 @@ const topbar = $('topbar');
 const bottombar = $('bottombar');
 const settingsEl = $('settings');
 const pageLabel = $('page-label');
+const pageSlider = $<HTMLInputElement>('page-slider');
 const cropPanel = $('crop-panel');
 
 const auth = new DriveAuth();
@@ -395,6 +396,7 @@ async function renderCurrent(): Promise<void> {
   const shown = currentShown();
   if (!shown) return;
   pageLabel.textContent = `${formatShownLabel(shown.indices, settings)} / 全${pages.length}`;
+  syncSlider();
   try {
     const result = await viewer.show(shown.spec);
     if (!result) return;
@@ -419,6 +421,28 @@ async function renderCurrent(): Promise<void> {
     showMessage(`ページを表示できませんでした: ${(e as Error).message}`, true);
   }
 }
+
+// ---------- 下バーのスライダー(メニューを出したときだけ見える) ----------
+
+/** スライダーを、現在のページ・総ページ数・開き方向に合わせる。右開きの本は、右端が先頭 */
+function syncSlider(): void {
+  pageSlider.max = String(Math.max(0, pages.length - 1));
+  pageSlider.value = String(index);
+  pageSlider.dir = doc?.settings.openDirection === 'rtl' ? 'rtl' : 'ltr';
+  pageSlider.disabled = pages.length <= 1;
+}
+// ドラッグ中は、ページ番号だけ更新する(重い描画は、指を離してから1回だけ)
+pageSlider.addEventListener('input', () => {
+  if (!doc) return;
+  const t = normalizeIndex(pages, clampIndex(pages, Number(pageSlider.value)), isDouble());
+  const g = groupAt(pages, t, isDouble(), doc.settings);
+  if (g) pageLabel.textContent = `${formatShownLabel(g.indices, doc.settings)} / 全${pages.length}`;
+});
+pageSlider.addEventListener('change', () => {
+  go(Number(pageSlider.value));
+  syncSlider(); // 見開きでそろえた位置などに、つまみを合わせる
+  pageSlider.blur(); // 矢印キー等のページ送りが、スライダーに奪われないように
+});
 
 function go(target: number): void {
   if (!doc) return;
