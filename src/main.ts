@@ -12,6 +12,7 @@ import {
   rectToMargins,
   type Margins,
 } from './model/crop';
+import { parseThemeMode, resolveTheme, THEME_COLOR, THEME_KEY, type ThemeMode } from './model/theme';
 import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown, type ViewSpec } from './model/layout';
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
@@ -1224,6 +1225,36 @@ $('crop-done').addEventListener('click', () => exitCrop(true));
 const MB = 1024 * 1024;
 const fmtSize = (bytes: number) => (bytes >= 1024 * MB ? `${(bytes / 1024 / MB).toFixed(1)} GB` : `${(bytes / MB).toFixed(1)} MB`);
 const fmtDate = (t: number) => new Date(t).toLocaleDateString('ja-JP');
+
+// ---------- 表示テーマ ----------
+const lightQuery = window.matchMedia('(prefers-color-scheme: light)');
+let themeMode: ThemeMode = (() => {
+  try {
+    return parseThemeMode(localStorage.getItem(THEME_KEY));
+  } catch {
+    return 'dark';
+  }
+})();
+function applyTheme(): void {
+  const t = resolveTheme(themeMode, lightQuery.matches);
+  document.documentElement.setAttribute('data-theme', t);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', THEME_COLOR[t]);
+}
+const themeSel = $<HTMLSelectElement>('theme-select');
+themeSel.value = themeMode;
+themeSel.addEventListener('change', () => {
+  themeMode = parseThemeMode(themeSel.value);
+  try {
+    localStorage.setItem(THEME_KEY, themeMode);
+  } catch {
+    /* 保存できなくても、この回は反映される */
+  }
+  applyTheme();
+});
+lightQuery.addEventListener('change', () => {
+  if (themeMode === 'auto') applyTheme(); // 端末の設定が変わったら、追従する
+});
+applyTheme();
 
 const SORT_KEY = 'library-sort:v1';
 let librarySort: LibrarySort = (() => {
