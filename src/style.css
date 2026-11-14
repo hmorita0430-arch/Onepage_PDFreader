@@ -360,3 +360,11 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 .settings p.error { color: var(--danger); margin: 4px 0; font-size: 0.85rem; }
 
 .crop-side { margin: 0 0 8px; font-size: 0.9rem; color: var(--muted); }
+
+/* 蛍光ペンの箇所の文字(OCR) */
+.anno-row { flex-wrap: wrap; }
+.anno-ocr { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 4px 4px 44px; }
+.anno-ocr select { width: 5.5rem; }
+.anno-ocr-status { flex: 1 1 100%; font-size: 0.8rem; min-height: 0; }
+.anno-ocr-status:empty { display: none; }
+.anno-ocr-area { flex: 1 1 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--muted); border-radius: 8px; padding: 6px 8px; }

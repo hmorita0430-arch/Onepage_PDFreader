@@ -67,7 +67,7 @@ export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NoteP
   }
 
   if (anyOcr) {
-    out.push('> 蛍光ペンの箇所の文字は、PDFのOCR文字データから取り出したものです。誤認識を含む場合があります。', '');
+    out.push('> 蛍光ペンの箇所の文字は、OCR(文字認識)で読み取ったもの、またはPDFの文字データから取り出したものです。誤認識を含む場合があります。', '');
   }
   return out.join('\n');
 }

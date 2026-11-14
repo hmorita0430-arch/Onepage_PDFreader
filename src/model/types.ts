@@ -109,6 +109,8 @@ export interface HighlightRect extends AnnotationBase {
   kind: 'highlight-rect';
   color: AnnotationColor;
   rect: NormRect;
+  /** 囲んだ箇所の文字(OCRで読み取って保存した、または手で直した文字)。無ければ未取得 */
+  ocrText?: string;
 }
 
 export interface HighlightStroke extends AnnotationBase {
@@ -117,6 +119,8 @@ export interface HighlightStroke extends AnnotationBase {
   points: NormPoint[];
   /** 線の太さ(元画像の幅に対する割合) */
   width: number;
+  /** 囲んだ箇所の文字(OCRで読み取って保存した、または手で直した文字)。無ければ未取得 */
+  ocrText?: string;
 }
 
 export interface Memo extends AnnotationBase {

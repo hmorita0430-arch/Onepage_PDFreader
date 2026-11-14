@@ -98,6 +98,19 @@ export function setAnnotationColor(list: readonly Annotation[], id: string, colo
   );
 }
 
+/**
+ * 蛍光ペンの箇所の文字(OCRの結果、または手で直した文字)を保存する。空にすると「未取得」に戻す。
+ * 更新日時を進めるので、同期で古い状態に負けない。
+ */
+export function setHighlightText(list: readonly Annotation[], id: string, text: string, now = Date.now()): Annotation[] {
+  return list.map((a) => {
+    if (a.id !== id || a.kind === 'memo') return a;
+    const { ocrText: _old, ...rest } = a;
+    const t = text.trim();
+    return { ...rest, ...(t === '' ? {} : { ocrText: t }), updatedAt: bump(a.updatedAt, now) } as Annotation;
+  });
+}
+
 /** 自由線の太さを変える */
 export function setStrokeWidth(list: readonly Annotation[], id: string, width: number, now = Date.now()): Annotation[] {
   return list.map((a) => (a.id === id && a.kind === 'highlight-stroke' ? { ...a, width, updatedAt: bump(a.updatedAt, now) } : a));

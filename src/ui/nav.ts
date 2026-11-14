@@ -1,8 +1,10 @@
-import { COLORS, COLOR_KEYS, deleteAnnotation, setAnnotationColor, visibleAnnotations } from '../model/annotations';
+import { COLORS, COLOR_KEYS, deleteAnnotation, setAnnotationColor, setHighlightText, visibleAnnotations } from '../model/annotations';
 import type { ViewSpec } from '../model/layout';
 import { addNamedPage, chapterTitleAt, deleteNamedPage, renameNamedPage, visibleNamed } from '../model/named';
 import { findIndex, formatPageLabel, jumpTarget, type LogicalPage } from '../model/pages';
 import type { Annotation, AnnotationColor, BookSyncDocument, NamedPage } from '../model/types';
+import type { OcrStatus } from '../ocr/ocr';
+import type { Orientation } from '../ocr/text';
 
 /**
  * ページ移動の画面: ページジャンプ(N-2)、しおり・目次(N-4)、サムネイル(N-3)。
@@ -22,6 +24,10 @@ export interface NavDeps {
   editMemo(id: string): void;
   /** 蛍光ペンの箇所の文字(文字データが無ければ null) */
   ocrTexts(annos: Annotation[]): Promise<Map<string, string | null>>;
+  /** 蛍光ペンの箇所を、端末内のOCRで読み取る(画像は端末の外へ送らない) */
+  ocrRecognize(a: Annotation, orientation: Orientation, onStatus: (s: OcrStatus) => void): Promise<string>;
+  /** 読み取りの書き方(縦書き/横書き)の既定。本の開き方向から決める */
+  ocrOrientation(): Orientation;
   /** 読書ノートをドライブへ書き出す */
   exportNotes(onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
   /** 書き出し先の説明(例: マイドライブ/読書ノート/本の名前/(既定)) */
@@ -197,9 +203,10 @@ export function createNav(deps: NavDeps) {
     return a.kind === 'memo' ? 'メモ' : a.kind === 'highlight-rect' ? '蛍光ペン(四角)' : '蛍光ペン(線)';
   }
 
-  /** 行に出す文章: メモは本文、蛍光ペンは文字データがあればその文字 */
+  /** 行に出す文章: メモは本文、蛍光ペンは保存した文字(OCR・手直し)、なければPDFの文字データ */
   function rowText(a: Annotation): string {
     if (a.kind === 'memo') return a.text;
+    if (a.ocrText) return a.ocrText;
     const t = ocrCache.get(a.id);
     return t ? t : '';
   }
@@ -313,12 +320,104 @@ export function createNav(deps: NavDeps) {
       renderAnnos();
     });
     li.append(del);
+    if (a.kind !== 'memo') li.append(ocrControls(a));
     return li;
+  }
+
+  // ---- 蛍光ペンの箇所の文字(OCR) ----
+  let lastOrientation: Orientation | null = null;
+
+  /** 行の下の「文字を取り出す」まわり。結果は注釈に保存し、手で直せる */
+  function ocrControls(a: Exclude<Annotation, { kind: 'memo' }>): HTMLElement {
+    const box = document.createElement('div');
+    box.className = 'anno-ocr';
+    const status = document.createElement('span');
+    status.className = 'anno-ocr-status muted';
+    status.setAttribute('role', 'status');
+
+    const ori = document.createElement('select');
+    ori.setAttribute('aria-label', '文字の書き方');
+    for (const [v, label] of [['vertical', '縦書き'], ['horizontal', '横書き']] as const) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = label;
+      ori.append(o);
+    }
+    ori.value = lastOrientation ?? deps.ocrOrientation();
+    ori.addEventListener('change', () => (lastOrientation = ori.value as Orientation));
+
+    const run = document.createElement('button');
+    run.type = 'button';
+    run.className = 'anno-ocr-run';
+    run.textContent = a.ocrText ? '読み取り直す' : '文字を取り出す';
+    run.addEventListener('click', async () => {
+      if (a.ocrText && !confirm('保存してある文字(手で直した分を含む)を、読み取り直した結果で置き換えます。よろしいですか?')) return;
+      run.disabled = true;
+      edit.disabled = true;
+      status.textContent = '';
+      try {
+        const text = await deps.ocrRecognize(a, ori.value as Orientation, (s) => {
+          status.textContent = s === 'loading' ? '準備しています(初めて使うときは、少し時間がかかります)…' : '読み取っています…';
+        });
+        if (text === '') {
+          status.textContent = '文字を読み取れませんでした。書き方(縦書き/横書き)を変えて、もう一度試してください。';
+          return;
+        }
+        const d = deps.getDoc();
+        if (!d) return;
+        d.annotations = setHighlightText(d.annotations, a.id, text);
+        deps.commit();
+        renderAnnos();
+      } catch (e) {
+        status.textContent = (e as Error).message || '読み取りに失敗しました';
+      } finally {
+        run.disabled = false;
+        edit.disabled = false;
+      }
+    });
+
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'anno-ocr-edit';
+    edit.textContent = a.ocrText ? '文字を直す' : '文字を入力';
+    edit.addEventListener('click', () => {
+      const area = document.createElement('textarea');
+      area.className = 'anno-ocr-area';
+      area.rows = 3;
+      area.value = a.ocrText ?? '';
+      area.setAttribute('aria-label', '蛍光ペンの箇所の文字');
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = '保存';
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.textContent = 'キャンセル';
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'danger';
+      clear.textContent = '文字を消す';
+      const commitText = (t: string) => {
+        const d = deps.getDoc();
+        if (!d) return;
+        d.annotations = setHighlightText(d.annotations, a.id, t);
+        deps.commit();
+        renderAnnos();
+      };
+      save.addEventListener('click', () => commitText(area.value));
+      clear.addEventListener('click', () => commitText(''));
+      cancel.addEventListener('click', () => renderAnnos());
+      area.addEventListener('keydown', (e) => e.stopPropagation()); // 文字入力中は、ページ送りなどのキーに反応しない
+      box.replaceChildren(area, save, cancel, ...(a.ocrText ? [clear] : []));
+      area.focus();
+    });
+
+    box.append(ori, run, edit, status);
+    return box;
   }
 
   /** 蛍光ペンの箇所の文字を、後から読み込んで行に反映する(文字データがあるPDFのみ) */
   async function loadOcr(rows: Row[], q: string): Promise<void> {
-    const todo = rows.map((r) => r.a).filter((a) => a.kind !== 'memo' && !ocrCache.has(a.id));
+    const todo = rows.map((r) => r.a).filter((a) => a.kind !== 'memo' && !a.ocrText && !ocrCache.has(a.id));
     if (todo.length === 0) return;
     const my = ++annoEpoch;
     const texts = await deps.ocrTexts(todo).catch(() => new Map<string, string | null>());

@@ -96,7 +96,9 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
         return { kind: 'memo', n: nums.get(a.id), text: a.text };
       }
       highlightCount++;
-      return { kind: 'highlight', colorLabel: COLORS[a.color].label, ocr: texts[h++] ?? null };
+      const fromPdf = texts[h++] ?? null;
+      // 保存した文字(OCR・手直し)を優先し、なければ、PDFの文字データ
+      return { kind: 'highlight', colorLabel: COLORS[a.color].label, ocr: a.ocrText ? a.ocrText : fromPdf };
     });
     notePages.push({
       label: formatPageLabel(index, doc.settings),

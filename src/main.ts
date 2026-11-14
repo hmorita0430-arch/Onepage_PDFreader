@@ -27,7 +27,10 @@ import { formatShownLabel, isLastPage, groupAt, nextIndex, normalizeIndex, prevI
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapZone } from './model/tap';
-import type { BookSettings, BookSyncDocument, NormRect, PageOverride, PageRef } from './model/types';
+import type { Annotation, BookSettings, BookSyncDocument, NormRect, PageOverride, PageRef } from './model/types';
+import { annotationBounds } from './model/annotations';
+import type { OcrStatus } from './ocr/ocr';
+import { defaultOrientation, type Orientation } from './ocr/text';
 import {
   deleteBook,
   getBlob,
@@ -767,10 +770,36 @@ const nav = createNav({
   },
   editMemo: (id) => annot.editMemo(id),
   ocrTexts: (annos) => highlightTexts(viewer, annos),
+  ocrRecognize: (a, orientation, onStatus) => recognizeHighlight(a, orientation, onStatus),
+  ocrOrientation: () => defaultOrientation(doc?.settings.openDirection ?? 'rtl'),
   exportNotes: (onProgress) => runExport(onProgress),
   destinationLabel: () => describeDestination(exportDest),
   chooseDestination: (report) => chooseDestination(report),
 });
+
+// ---------- 蛍光ペンの箇所の文字(OCR。端末内で読み取る) ----------
+
+/** 囲んだ箇所(少し広げて)を、読み取りに十分な大きさで描いて、文字にする */
+async function recognizeHighlight(a: Annotation, orientation: Orientation, onStatus: (s: OcrStatus) => void): Promise<string> {
+  if (a.kind === 'memo') return '';
+  const size = await viewer.pageSize(a.page.pdfPage);
+  const b = annotationBounds(a, size);
+  const padX = Math.min(0.02, b.w * 0.15);
+  const padY = Math.min(0.02, b.h * 0.15);
+  const x0 = Math.max(0, b.x - padX);
+  const y0 = Math.max(0, b.y - padY);
+  const x1 = Math.min(1, b.x + b.w + padX);
+  const y1 = Math.min(1, b.y + b.h + padY);
+  const region = { x: x0, y: y0, w: Math.max(0.001, x1 - x0), h: Math.max(0.001, y1 - y0) };
+  const r = await viewer.renderToCanvas({ pdfPage: a.page.pdfPage, region }, 2400);
+  if (!r) return '';
+  try {
+    const { recognize } = await import('./ocr/ocr');
+    return await recognize(r.canvas, orientation, onStatus);
+  } finally {
+    r.canvas.width = 0; // メモリを早めに手放す
+  }
+}
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
 
