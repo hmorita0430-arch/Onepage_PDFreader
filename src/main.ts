@@ -51,6 +51,7 @@ import { createNav } from './ui/nav';
 import { clearDestination, describeDestination, loadDestination, saveDestination } from './export/destination';
 import { highlightTexts, prepareExport, uploadExport, type ExportPackage } from './export/exporter';
 import { createPreview } from './ui/preview';
+import { loadIncludeImages, saveIncludeImages } from './export/options';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
 import {
@@ -1154,21 +1155,21 @@ async function chooseDestination(report: (message: string) => void): Promise<voi
  */
 async function previewExport(onProgress: (message: string) => void): Promise<void> {
   if (!doc) throw new Error('本が開かれていません');
-  const pkg = await prepareExport({ doc, pages, bookName, viewer, onProgress });
+  const pkg = await prepareExport({ doc, pages, bookName, viewer, onProgress, includeImages: loadIncludeImages() });
   preview.open(pkg); // 設定・一覧は開いたまま(プレビューを閉じると、元の画面に戻る)
 }
 
 /** プレビューの内容を、ドライブへ保存する。失敗は例外(文言は利用者向け)。 */
-async function runExport(pkg: ExportPackage, onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
+async function runExport(pkg: ExportPackage, includeImages: boolean, onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
   if (!doc) throw new Error('本が開かれていません');
   const token = auth.currentToken();
   if (!token) {
     throw new Error('ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。');
   }
   try {
-    const r = await uploadExport(pkg, { token, onProgress, destination: exportDest });
+    const r = await uploadExport(pkg, { token, onProgress, destination: exportDest, includeImages });
     return {
-      message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)。保存先: ${r.locationLabel}`,
+      message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)。保存先: ${r.locationLabel}${includeImages ? '' : '(ページの画像は書き出していません)'}`,
       url: r.folderUrl,
     };
   } catch (e) {
@@ -1194,7 +1195,13 @@ renderExportDest();
 
 const preview = createPreview({
   destinationLabel: () => describeDestination(exportDest),
-  upload: (pkg, onProgress) => runExport(pkg, onProgress),
+  getIncludeImages: loadIncludeImages,
+  setIncludeImages: saveIncludeImages,
+  rebuildWithImages: (onProgress) => {
+    if (!doc) throw new Error('本が開かれていません');
+    return prepareExport({ doc, pages, bookName, viewer, onProgress, includeImages: true });
+  },
+  upload: (pkg, includeImages, onProgress) => runExport(pkg, includeImages, onProgress),
   openAnnotation: (id) => {
     if (!preview.close()) return; // 保存中は、戻らない
     settingsEl.hidden = true;

@@ -8,8 +8,13 @@ import { OCR_NOTE, type NoteItem } from '../export/markdown';
  */
 export interface PreviewDeps {
   destinationLabel(): string;
+  /** ページ画像も書き出すか(この端末に保存している選択) */
+  getIncludeImages(): boolean;
+  setIncludeImages(on: boolean): void;
+  /** 画像を作らずに用意していた内容を、画像つきで作り直す(画像をオンに切り替えたとき) */
+  rebuildWithImages(onProgress: (message: string) => void): Promise<ExportPackage>;
   /** 内容をドライブへ保存する。失敗は例外(文言は利用者向け) */
-  upload(pkg: ExportPackage, onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
+  upload(pkg: ExportPackage, includeImages: boolean, onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
   /** プレビューを閉じて、注釈の一覧の該当の注釈へ戻る(id が無ければ、一覧だけ) */
   openAnnotation(id: string | null): void;
 }
@@ -32,11 +37,16 @@ export function createPreview(deps: PreviewDeps) {
   const exportBtn = el<HTMLButtonElement>('preview-export');
   const backBtn = el<HTMLButtonElement>('preview-back');
   const closeBtn = el<HTMLButtonElement>('preview-close');
+  const imagesChk = el<HTMLInputElement>('preview-images');
+  const imagesNote = el('preview-images-note');
   let pkg: ExportPackage | null = null;
   let urls: string[] = [];
   let busy = false;
 
-  function render(p: ExportPackage): void {
+  function render(p: ExportPackage, includeImages: boolean): void {
+    for (const u of urls) URL.revokeObjectURL(u);
+    urls = [];
+    imagesNote.hidden = includeImages;
     const parts = [`メモ ${p.memoCount}件 ・ 蛍光ペン ${p.highlightCount}件 ・ ${p.pageCount}ページ`];
     if (p.reading) parts.push(`読書の記録: ${p.reading}`);
     summary.textContent = `${p.title}\n${parts.join('\n')}`;
@@ -63,7 +73,7 @@ export function createPreview(deps: PreviewDeps) {
       title.addEventListener('click', () => deps.openAnnotation(pg.items[0]?.id ?? null));
       sec.append(title);
       const name = pg.imagePath?.replace(/^images\//, '');
-      const blob = name ? imageByName.get(name) : undefined;
+      const blob = includeImages && name ? imageByName.get(name) : undefined;
       if (blob) {
         const url = URL.createObjectURL(blob);
         urls.push(url);
@@ -120,7 +130,10 @@ export function createPreview(deps: PreviewDeps) {
     link.hidden = true;
     exportBtn.disabled = false;
     dest.textContent = deps.destinationLabel();
-    render(p);
+    const include = deps.getIncludeImages();
+    imagesChk.checked = include;
+    imagesChk.disabled = false;
+    render(p, include);
     root.hidden = false;
     root.querySelector('.preview-scroll')?.scrollTo({ top: 0 });
     exportBtn.focus();
@@ -142,14 +155,46 @@ export function createPreview(deps: PreviewDeps) {
     return true;
   }
 
+  function lock(on: boolean): void {
+    busy = on;
+    exportBtn.disabled = on;
+    imagesChk.disabled = on;
+    backBtn.disabled = closeBtn.disabled = on;
+  }
+
+  // ページ画像の書き出しのオン・オフ。選択は、この端末に保存して、次の書き出しにも使う
+  imagesChk.addEventListener('change', async () => {
+    if (!pkg || busy) return;
+    const on = imagesChk.checked;
+    deps.setIncludeImages(on);
+    link.hidden = true;
+    if (on && !pkg.hasImages) {
+      // 画像を作らずに用意していたので、画像をオンにするには作り直す
+      lock(true);
+      status.textContent = 'ページの画像を作っています…';
+      try {
+        pkg = await deps.rebuildWithImages((m) => (status.textContent = m));
+        status.textContent = '';
+      } catch (e) {
+        status.textContent = (e as Error).message;
+        imagesChk.checked = false;
+        deps.setIncludeImages(false);
+        render(pkg, false);
+        lock(false);
+        return;
+      }
+      lock(false);
+    }
+    status.textContent = '';
+    render(pkg, on);
+  });
+
   exportBtn.addEventListener('click', async () => {
     if (!pkg || busy) return;
-    busy = true;
-    exportBtn.disabled = true;
-    backBtn.disabled = closeBtn.disabled = true;
+    lock(true);
     link.hidden = true;
     try {
-      const r = await deps.upload(pkg, (m) => (status.textContent = m));
+      const r = await deps.upload(pkg, imagesChk.checked, (m) => (status.textContent = m));
       status.textContent = r.message;
       link.href = r.url;
       link.hidden = false;
@@ -157,9 +202,7 @@ export function createPreview(deps: PreviewDeps) {
     } catch (e) {
       status.textContent = (e as Error).message;
     } finally {
-      busy = false;
-      exportBtn.disabled = false;
-      backBtn.disabled = closeBtn.disabled = false;
+      lock(false);
       exportBtn.textContent = 'もう一度書き出す';
     }
   });

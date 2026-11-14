@@ -14,6 +14,8 @@ export const OUTPUT_FOLDER = DEFAULT_OUTPUT_FOLDER;
 const IMAGE_MAX_SIDE = 1800;
 
 export interface ExportViewer {
+  /** PDFページ(見開き1枚)全体の大きさ。画像を作らないとき、蛍光ペンの範囲の計算に使う */
+  pageSize(pdfPage: number): Promise<PageSize>;
   renderToCanvas(spec: { pdfPage: number; region: NormRect }, maxSide: number): Promise<{ canvas: HTMLCanvasElement; page: PageSize } | null>;
   textInRegions(pdfPage: number, regions: NormRect[]): Promise<(string | null)[]>;
 }
@@ -51,9 +53,10 @@ function canvasToBlob(c: HTMLCanvasElement): Promise<Blob> {
 export interface ExportPackage {
   /** ドライブ上のフォルダ名(本の名前) */
   title: string;
-  markdown: string;
-  /** 画像(images/<name>)。注釈を重ねたJPEG */
+  /** 画像(images/<name>)。注釈を重ねたJPEG。画像を作らなかった場合は空 */
   images: { name: string; blob: Blob }[];
+  /** ページ画像を作ったか。作っていないパッケージで画像を書き出すには、作り直しが必要 */
+  hasImages: boolean;
   /** プレビュー用。Markdownと同じ内容・順序 */
   notePages: NotePage[];
   /** 読書の記録(例: 2026/11/01 〜 2026/11/14(14日間))。無ければ空 */
@@ -64,7 +67,16 @@ export interface ExportPackage {
   highlightCount: number;
 }
 
-export type PrepareInput = Pick<ExportInput, 'doc' | 'pages' | 'bookName' | 'viewer' | 'onProgress' | 'now'>;
+export type PrepareInput = Pick<ExportInput, 'doc' | 'pages' | 'bookName' | 'viewer' | 'onProgress' | 'now'> & {
+  /** ページ画像を作るか(既定: 作る)。作らなければ、速く、画像のないノートになる */
+  includeImages?: boolean;
+};
+
+/** 書き出すMarkdown。画像を書き出さないときは、画像のリンクを入れない */
+export function markdownFor(pkg: ExportPackage, includeImages: boolean): string {
+  const pages = includeImages ? pkg.notePages : pkg.notePages.map((p) => ({ ...p, imagePath: null }));
+  return buildMarkdown({ title: pkg.title, exportedAt: pkg.exportedAt, pages, reading: pkg.reading });
+}
 
 /**
  * 書き出す内容を作る(ドライブには何も書き込まない)。注釈のあるページごとに、注釈を重ねた画像を作り、
@@ -72,6 +84,7 @@ export type PrepareInput = Pick<ExportInput, 'doc' | 'pages' | 'bookName' | 'vie
  */
 export async function prepareExport(input: PrepareInput): Promise<ExportPackage> {
   const { doc, pages, viewer } = input;
+  const includeImages = input.includeImages ?? true;
   const say = input.onProgress ?? (() => {});
   const groups = groupByPage(pages, doc.annotations);
   if (groups.size === 0) throw new Error('書き出せる注釈がありません(蛍光ペンやメモを付けてください)');
@@ -90,7 +103,7 @@ export async function prepareExport(input: PrepareInput): Promise<ExportPackage>
     if (!shown) continue;
     say(`プレビューを作っています(${step + 1}/${order.length})`);
 
-    const rendered = await viewer.renderToCanvas(shown.spec, IMAGE_MAX_SIDE);
+    const rendered = includeImages ? await viewer.renderToCanvas(shown.spec, IMAGE_MAX_SIDE) : null;
     let imagePath: string | null = null;
     if (rendered) {
       drawAnnotations(rendered.canvas, annos, shown.spec.region, rendered.page);
@@ -102,7 +115,7 @@ export async function prepareExport(input: PrepareInput): Promise<ExportPackage>
 
     // 蛍光ペンの箇所の文字(OCRの文字データがあるときだけ)
     const highlights = annos.filter((a) => a.kind !== 'memo');
-    const pageSize = rendered?.page ?? { w: 1, h: 1 };
+    const pageSize = rendered?.page ?? (await viewer.pageSize(shown.spec.pdfPage));
     const texts = highlights.length
       ? await viewer.textInRegions(shown.spec.pdfPage, highlights.map((a) => clip(annotationBounds(a, pageSize))))
       : [];
@@ -130,28 +143,32 @@ export async function prepareExport(input: PrepareInput): Promise<ExportPackage>
   const title = safeName(input.bookName.replace(/\.pdf$/i, ''));
   const exportedAt = input.now ?? new Date();
   const reading = readingSummary(doc.reading);
-  const markdown = buildMarkdown({ title, exportedAt, pages: notePages, reading });
-  return { title, markdown, images, notePages, reading, exportedAt, pageCount: notePages.length, memoCount, highlightCount };
+  return { title, images, hasImages: includeImages, notePages, reading, exportedAt, pageCount: notePages.length, memoCount, highlightCount };
 }
 
-export type UploadInput = Pick<ExportInput, 'token' | 'onProgress' | 'destination' | 'fetchFn'>;
+export type UploadInput = Pick<ExportInput, 'token' | 'onProgress' | 'destination' | 'fetchFn'> & {
+  /** ページ画像も保存するか(既定: する)。しなければ、images フォルダも作らず、以前の画像にも触れない */
+  includeImages?: boolean;
+};
 
 /** 用意した内容を、ドライブの通常フォルダへ保存する。何度実行しても、同名のファイルは更新される(重複しない)。 */
 export async function uploadExport(pkg: ExportPackage, input: UploadInput): Promise<ExportResult> {
   const { token } = input;
+  const includeImages = (input.includeImages ?? true) && pkg.hasImages;
   const say = input.onProgress ?? (() => {});
   say('ドライブにフォルダを用意しています');
   const f = input.fetchFn ?? fetch;
   const root = await resolveOutputRoot(input.destination ?? null, token, f);
   const bookFolder = await ensureFolder(pkg.title, root, token, f);
-  const imagesFolder = await ensureFolder('images', bookFolder, token, f);
-
-  for (const [i, img] of pkg.images.entries()) {
-    say(`画像を保存しています(${i + 1}/${pkg.images.length})`);
-    await upsertFile(img.name, imagesFolder, img.blob, 'image/jpeg', token, f);
+  if (includeImages) {
+    const imagesFolder = await ensureFolder('images', bookFolder, token, f);
+    for (const [i, img] of pkg.images.entries()) {
+      say(`画像を保存しています(${i + 1}/${pkg.images.length})`);
+      await upsertFile(img.name, imagesFolder, img.blob, 'image/jpeg', token, f);
+    }
   }
   say('Markdownを保存しています');
-  await upsertFile('読書ノート.md', bookFolder, new Blob([pkg.markdown], { type: 'text/markdown' }), 'text/markdown', token, f);
+  await upsertFile('読書ノート.md', bookFolder, new Blob([markdownFor(pkg, includeImages)], { type: 'text/markdown' }), 'text/markdown', token, f);
 
   const base = input.destination ? input.destination.name : `マイドライブ/${OUTPUT_FOLDER}`;
   return { folderUrl: folderUrl(bookFolder), locationLabel: `${base}/${pkg.title}`, pageCount: pkg.pageCount, memoCount: pkg.memoCount, highlightCount: pkg.highlightCount };
@@ -171,7 +188,7 @@ export async function exportNotes(input: ExportInput): Promise<ExportResult> {
  * ページごとにまとめて取り出す。
  */
 export async function highlightTexts(
-  viewer: ExportViewer & { pageSize(pdfPage: number): Promise<PageSize> },
+  viewer: Pick<ExportViewer, 'textInRegions' | 'pageSize'>,
   annos: readonly Annotation[],
 ): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();

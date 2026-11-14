@@ -4,6 +4,8 @@ import { addRect, addMemo, setHighlightText, visibleAnnotations } from '../src/m
 import { mergeDocuments } from '../src/sync/merge';
 import { newBookSyncDocument, type Annotation, type HighlightRect } from '../src/model/types';
 import { buildMarkdown } from '../src/export/markdown';
+import { markdownFor, type ExportPackage } from '../src/export/exporter';
+import { loadIncludeImages, saveIncludeImages } from '../src/export/options';
 
 describe('OCRの文字の整形', () => {
   it('日本語どうしの間の空白・改行を詰める', () => {
@@ -96,5 +98,39 @@ describe('書き出し: 保存した文字', () => {
       title: '本', exportedAt: new Date(2026, 10, 14), pages: [{ label: 'p.1', imagePath: null, items: [{ kind: 'memo', id: 'secret-id-1', n: 1, text: 'メモ' }] }],
     });
     expect(md).not.toContain('secret-id-1');
+  });
+});
+
+describe('書き出し: ページ画像のオン・オフ', () => {
+  const pkg: ExportPackage = {
+    title: '本', images: [{ name: 'page-001.jpg', blob: new Blob(['x']) }], hasImages: true, reading: '', exportedAt: new Date(2026, 10, 14, 9, 0),
+    pageCount: 1, memoCount: 1, highlightCount: 0,
+    notePages: [{ label: '通し番号1', imagePath: 'images/page-001.jpg', items: [{ kind: 'memo', n: 1, text: 'メモ' }] }],
+  };
+  it('オン: 画像のリンクが入る', () => {
+    expect(markdownFor(pkg, true)).toContain('![通し番号1](images/page-001.jpg)');
+  });
+  it('オフ: 画像のリンクが入らない。見出し・メモは残る', () => {
+    const md = markdownFor(pkg, false);
+    expect(md).not.toContain('![');
+    expect(md).not.toContain('images/');
+    expect(md).toContain('## 通し番号1');
+    expect(md).toContain('- **メモ1**: メモ');
+  });
+  it('オフを渡しても、元の内容(notePages)は書き換えない', () => {
+    markdownFor(pkg, false);
+    expect(pkg.notePages[0]?.imagePath).toBe('images/page-001.jpg');
+  });
+  it('選択の保存: 既定はオン。オフにすると覚える', () => {
+    const store = new Map<string, string>();
+    (globalThis as unknown as { localStorage: Storage }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+    } as Storage;
+    expect(loadIncludeImages()).toBe(true);
+    saveIncludeImages(false);
+    expect(loadIncludeImages()).toBe(false);
+    saveIncludeImages(true);
+    expect(loadIncludeImages()).toBe(true);
   });
 });
