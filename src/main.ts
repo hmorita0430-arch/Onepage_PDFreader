@@ -49,7 +49,8 @@ import { isSyncable, syncBook } from './sync/remote';
 import { createAnnotator } from './ui/annotate';
 import { createNav } from './ui/nav';
 import { clearDestination, describeDestination, loadDestination, saveDestination } from './export/destination';
-import { exportNotes, highlightTexts } from './export/exporter';
+import { highlightTexts, prepareExport, uploadExport, type ExportPackage } from './export/exporter';
+import { createPreview } from './ui/preview';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
 import {
@@ -328,6 +329,10 @@ function popReaderHistory(): void {
 
 /** 前面にある画面を1つ閉じる。閉じたものがあれば true */
 function closeTopOverlay(): boolean {
+  if (preview.isOpen()) {
+    preview.close(); // 保存中は閉じない(閉じなくても、「戻る」は、この画面の操作として扱う)
+    return true;
+  }
   if (annot.isEditorOpen()) {
     annot.closeEditor();
     return true;
@@ -772,7 +777,7 @@ const nav = createNav({
   ocrTexts: (annos) => highlightTexts(viewer, annos),
   ocrRecognize: (a, orientation, onStatus) => recognizeHighlight(a, orientation, onStatus),
   ocrOrientation: () => defaultOrientation(doc?.settings.openDirection ?? 'rtl'),
-  exportNotes: (onProgress) => runExport(onProgress),
+  previewExport: (onProgress) => previewExport(onProgress),
   destinationLabel: () => describeDestination(exportDest),
   chooseDestination: (report) => chooseDestination(report),
 });
@@ -881,6 +886,10 @@ attachGestures(stageEl, {
 
 document.addEventListener('keydown', (e) => {
   if (!doc || readerEl.hidden) return;
+  if (preview.isOpen()) {
+    if (e.key === 'Escape') closeTopOverlay();
+    return;
+  }
   if (nav.isOpen()) {
     if (e.key === 'Escape') closeTopOverlay();
     return;
@@ -1139,15 +1148,25 @@ async function chooseDestination(report: (message: string) => void): Promise<voi
   report(`保存先を「${picked.name}」にしました。次の書き出しから、この中の「本の名前」フォルダに保存します。`);
 }
 
-/** 読書ノートを書き出す。設定画面と、注釈の一覧画面の両方から呼ぶ。失敗は例外(文言は利用者向け)。 */
-async function runExport(onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
+/**
+ * 書き出す内容を作って、プレビューを開く。設定画面と、注釈の一覧画面の両方から呼ぶ。失敗は例外(文言は利用者向け)。
+ * ドライブには、何も書き込まない(接続していなくても、プレビューは見られる)。
+ */
+async function previewExport(onProgress: (message: string) => void): Promise<void> {
+  if (!doc) throw new Error('本が開かれていません');
+  const pkg = await prepareExport({ doc, pages, bookName, viewer, onProgress });
+  preview.open(pkg); // 設定・一覧は開いたまま(プレビューを閉じると、元の画面に戻る)
+}
+
+/** プレビューの内容を、ドライブへ保存する。失敗は例外(文言は利用者向け)。 */
+async function runExport(pkg: ExportPackage, onProgress: (message: string) => void): Promise<{ message: string; url: string }> {
   if (!doc) throw new Error('本が開かれていません');
   const token = auth.currentToken();
   if (!token) {
     throw new Error('ドライブに接続していません。「ドライブに接続」(または「再接続」)を押してから、もう一度お試しください。');
   }
   try {
-    const r = await exportNotes({ doc, pages, bookName, viewer, token, onProgress, destination: exportDest });
+    const r = await uploadExport(pkg, { token, onProgress, destination: exportDest });
     return {
       message: `書き出しました(${r.pageCount}ページ、メモ${r.memoCount}件、蛍光ペン${r.highlightCount}件)。保存先: ${r.locationLabel}`,
       url: r.folderUrl,
@@ -1173,14 +1192,22 @@ $('export-dest-reset').addEventListener('click', () => {
 });
 renderExportDest();
 
+const preview = createPreview({
+  destinationLabel: () => describeDestination(exportDest),
+  upload: (pkg, onProgress) => runExport(pkg, onProgress),
+  openAnnotation: (id) => {
+    if (!preview.close()) return; // 保存中は、戻らない
+    settingsEl.hidden = true;
+    nav.focusAnnotation(id);
+  },
+});
+
 exportBtn.addEventListener('click', async () => {
   exportLink.hidden = true;
   exportBtn.disabled = true;
   try {
-    const r = await runExport((m) => (exportStatus.textContent = m));
-    exportStatus.textContent = r.message;
-    exportLink.href = r.url;
-    exportLink.hidden = false;
+    await previewExport((m) => (exportStatus.textContent = m));
+    exportStatus.textContent = '';
   } catch (e) {
     exportStatus.textContent = (e as Error).message;
   } finally {

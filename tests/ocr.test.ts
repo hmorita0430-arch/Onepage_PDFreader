@@ -83,4 +83,18 @@ describe('書き出し: 保存した文字', () => {
     expect(md).toContain('- **蛍光ペン(青)**: (文字データなし)');
     expect(md).toContain('OCR(文字認識)で読み取ったもの');
   });
+
+  it('読書の記録の行: 記録がある本だけ、出力日時の下に入る', () => {
+    const base = { title: '本', exportedAt: new Date(2026, 10, 14, 9, 0), pages: [{ label: 'p.1', imagePath: null, items: [] }] };
+    const withReading = buildMarkdown({ ...base, reading: '2026/11/01 〜 2026/11/14(14日間)' });
+    expect(withReading).toContain('- 出力日時: 2026-11-14 09:00\n- 読書の記録: 2026/11/01 〜 2026/11/14(14日間)\n- メモ 0件 / 蛍光ペン 0件');
+    expect(buildMarkdown(base)).not.toContain('読書の記録');
+    expect(buildMarkdown({ ...base, reading: '' })).not.toContain('読書の記録');
+  });
+  it('注釈のID(プレビュー用)は、Markdownに出さない', () => {
+    const md = buildMarkdown({
+      title: '本', exportedAt: new Date(2026, 10, 14), pages: [{ label: 'p.1', imagePath: null, items: [{ kind: 'memo', id: 'secret-id-1', n: 1, text: 'メモ' }] }],
+    });
+    expect(md).not.toContain('secret-id-1');
+  });
 });

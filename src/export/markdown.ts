@@ -4,6 +4,8 @@
  */
 export interface NoteItem {
   kind: 'memo' | 'highlight';
+  /** 注釈のID(プレビューから注釈一覧へ戻るため。Markdown には出さない) */
+  id?: string;
   /** メモの番号(画像の番号と一致) */
   n?: number;
   /** 蛍光ペンの色の名前(例: 黄) */
@@ -24,6 +26,9 @@ export interface NotePage {
   items: NoteItem[];
 }
 
+/** 蛍光ペンの箇所の文字がある場合に、末尾に添える注記(プレビューにも同じものを出す) */
+export const OCR_NOTE = '蛍光ペンの箇所の文字は、OCR(文字認識)で読み取ったもの、またはPDFの文字データから取り出したものです。誤認識を含む場合があります。';
+
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** リスト項目の中で改行しても、項目が崩れないようにする */
@@ -33,7 +38,7 @@ const two = (n: number) => String(n).padStart(2, '0');
 export const formatDateTime = (d: Date): string =>
   `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
 
-export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NotePage[] }): string {
+export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NotePage[]; reading?: string }): string {
   const memos = p.pages.reduce((n, pg) => n + pg.items.filter((i) => i.kind === 'memo').length, 0);
   const highlights = p.pages.reduce((n, pg) => n + pg.items.filter((i) => i.kind === 'highlight').length, 0);
   const anyOcr = p.pages.some((pg) => pg.items.some((i) => typeof i.ocr === 'string'));
@@ -41,6 +46,7 @@ export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NoteP
   const out: string[] = [];
   out.push(`# ${oneLine(p.title)} 読書ノート`, '');
   out.push(`- 出力日時: ${formatDateTime(p.exportedAt)}`);
+  if (p.reading) out.push(`- 読書の記録: ${oneLine(p.reading)}`); // 読み始めた日・読了日がある本だけ
   out.push(`- メモ ${memos}件 / 蛍光ペン ${highlights}件`, '');
 
   // 目次(章)があれば、章を見出し(##)、ページを小見出し(###)にする
@@ -67,7 +73,7 @@ export function buildMarkdown(p: { title: string; exportedAt: Date; pages: NoteP
   }
 
   if (anyOcr) {
-    out.push('> 蛍光ペンの箇所の文字は、OCR(文字認識)で読み取ったもの、またはPDFの文字データから取り出したものです。誤認識を含む場合があります。', '');
+    out.push(`> ${OCR_NOTE}`, '');
   }
   return out.join('\n');
 }

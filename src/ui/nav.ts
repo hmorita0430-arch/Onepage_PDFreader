@@ -28,8 +28,8 @@ export interface NavDeps {
   ocrRecognize(a: Annotation, orientation: Orientation, onStatus: (s: OcrStatus) => void): Promise<string>;
   /** 読み取りの書き方(縦書き/横書き)の既定。本の開き方向から決める */
   ocrOrientation(): Orientation;
-  /** 読書ノートをドライブへ書き出す */
-  exportNotes(onProgress: (message: string) => void): Promise<{ message: string; url: string }>;
+  /** 書き出す内容を作って、プレビューを開く(ドライブには書き込まない)。失敗は例外 */
+  previewExport(onProgress: (message: string) => void): Promise<void>;
   /** 書き出し先の説明(例: マイドライブ/読書ノート/本の名前/(既定)) */
   destinationLabel(): string;
   /** 書き出し先のフォルダを、ドライブ上で選び直す。結果・失敗は report で知らせる */
@@ -440,20 +440,15 @@ export function createNav(deps: NavDeps) {
   const annoDest = el('anno-export-dest');
   const renderDest = () => (annoDest.textContent = deps.destinationLabel());
   el('anno-dest-pick').addEventListener('click', () => {
-    annoExportLink.hidden = true;
     void deps.chooseDestination((m) => (annoExportStatus.textContent = m)).then(renderDest, (e: Error) => (annoExportStatus.textContent = e.message));
   });
   const annoExportBtn = el<HTMLButtonElement>('anno-export');
   const annoExportStatus = el('anno-export-status');
-  const annoExportLink = el<HTMLAnchorElement>('anno-export-link');
   annoExportBtn.addEventListener('click', async () => {
-    annoExportLink.hidden = true;
     annoExportBtn.disabled = true;
     try {
-      const r = await deps.exportNotes((m) => (annoExportStatus.textContent = m));
-      annoExportStatus.textContent = r.message;
-      annoExportLink.href = r.url;
-      annoExportLink.hidden = false;
+      await deps.previewExport((m) => (annoExportStatus.textContent = m));
+      annoExportStatus.textContent = '';
     } catch (e) {
       annoExportStatus.textContent = (e as Error).message;
     } finally {
@@ -584,5 +579,19 @@ export function createNav(deps: NavDeps) {
   }
 
   el('nav-close').addEventListener('click', close);
-  return { open, close, refresh, reset, isOpen: () => !root.hidden };
+
+  /** 注釈の一覧を開いて、指定の注釈の行へ移る(プレビューから、直しに戻るとき) */
+  function focusAnnotation(id: string | null): void {
+    open('annos');
+    annoQ.value = '';
+    annoType.value = 'all';
+    annoColor.value = 'all';
+    renderAnnos();
+    if (!id) return;
+    const row = annoList.querySelector<HTMLElement>(`li[data-id="${CSS.escape(id)}"]`);
+    row?.scrollIntoView({ block: 'center' });
+    row?.classList.add('anno-focus');
+  }
+
+  return { open, close, refresh, reset, focusAnnotation, isOpen: () => !root.hidden };
 }

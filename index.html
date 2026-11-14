@@ -168,7 +168,7 @@
             <button id="export-dest-pick" class="secondary" type="button">保存先を選ぶ…</button>
             <button id="export-dest-reset" class="link" type="button" hidden>既定に戻す</button>
           </div>
-          <button id="export-notes" class="secondary" type="button">ドライブに書き出す</button>
+          <button id="export-notes" class="secondary" type="button">プレビューして書き出す</button>
           <p id="export-status" class="muted" role="status"></p>
           <a id="export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
         </fieldset>
@@ -185,6 +185,27 @@
         <p id="version-reader" class="muted"></p>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
+      <section id="export-preview" class="export-preview" hidden role="dialog" aria-label="書き出しのプレビュー">
+        <header class="nav-head">
+          <h2 class="preview-title">書き出しのプレビュー</h2>
+          <button id="preview-close" class="icon" type="button" aria-label="プレビューを閉じる">✕</button>
+        </header>
+        <div class="preview-scroll">
+          <p id="preview-summary" class="preview-summary"></p>
+          <p class="muted preview-hint">見るだけの画面です。直したい箇所は、タップすると注釈の一覧へ戻ります。</p>
+          <div id="preview-body" class="preview-body"></div>
+        </div>
+        <footer class="preview-foot">
+          <p class="muted">保存先: <span id="preview-dest"></span></p>
+          <p id="preview-status" class="muted" role="status"></p>
+          <a id="preview-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
+          <div class="preview-actions">
+            <button id="preview-back" class="secondary" type="button">閉じる</button>
+            <button id="preview-export" class="primary" type="button">この内容で書き出す</button>
+          </div>
+        </footer>
+      </section>
+
       <section id="nav" class="nav" hidden aria-label="ページ移動">
         <header class="nav-head">
           <div class="tabs" role="tablist">
@@ -248,9 +269,8 @@
           <div class="anno-export">
             <p class="muted">保存先: <span id="anno-export-dest"></span>
               <button id="anno-dest-pick" class="link" type="button">変更</button></p>
-            <button id="anno-export" class="primary" type="button">ドライブに書き出す</button>
+            <button id="anno-export" class="primary" type="button">プレビューして書き出す</button>
             <p id="anno-export-status" class="muted" role="status"></p>
-            <a id="anno-export-link" class="link" hidden target="_blank" rel="noopener">ドライブで開く</a>
           </div>
         </div>
 
