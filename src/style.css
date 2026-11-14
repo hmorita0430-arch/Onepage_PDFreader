@@ -343,3 +343,18 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 /* 下バー: ページ番号の下に、全幅のスライダー(メニューを出したときだけ) */
 .bar.bottom { flex-direction: column; align-items: stretch; gap: 0; text-align: center; }
 .bar.bottom #page-slider { width: 100%; min-height: 44px; margin: 0; }
+
+/* 読了の確認(最後のページに着いたとき) */
+.finish-prompt {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(110px + env(safe-area-inset-bottom)); z-index: 4;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: center;
+  padding: 8px 8px 8px 16px; border-radius: 24px; max-width: calc(100% - 16px);
+  background: var(--surface); border: 1px solid var(--accent); font-size: 0.9rem;
+}
+.finish-prompt button { width: auto; margin: 0; min-height: 44px; padding: 0 14px; border-radius: 22px; border: none; background: none; color: var(--accent); font: inherit; }
+.finish-prompt button.primary { background: var(--accent); color: var(--on-accent); font-weight: 600; }
+.reader.cropping .finish-prompt { display: none; }
+.date-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.date-row button { width: auto; margin: 0; padding: 0 12px; white-space: nowrap; }
+.settings input[type="date"] { min-height: 44px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--muted); border-radius: 8px; padding: 0 8px; max-width: 100%; }
+.settings p.error { color: var(--danger); margin: 4px 0; font-size: 0.85rem; }

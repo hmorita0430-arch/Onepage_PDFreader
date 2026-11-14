@@ -4,6 +4,8 @@ import {
   type BookSettingsKey,
   type BookSyncDocument,
 } from '../model/types';
+import { mergeReading, readingChanges } from '../model/reading';
+import { stableStringify } from './stable';
 
 /**
  * 同期の統合規則(要件定義書 4章)。DOM・通信に依存しない純粋関数。
@@ -14,13 +16,7 @@ import {
  * どの順序で統合しても同じ結果になる(可換・冪等・結合的)ように、同時刻は内容の比較で決める。
  */
 
-export function stableStringify(v: unknown): string {
-  return JSON.stringify(v, (_k, val: unknown) =>
-    val && typeof val === 'object' && !Array.isArray(val)
-      ? Object.fromEntries(Object.entries(val).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : val,
-  );
-}
+export { stableStringify };
 
 function pickNewer<T extends { updatedAt: number }>(a: T, b: T): T {
   if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt ? a : b;
@@ -66,6 +62,7 @@ export function mergeDocuments(a: BookSyncDocument, b: BookSyncDocument): BookSy
 
   const position = !a.position ? b.position : !b.position ? a.position : pickNewer(a.position, b.position);
 
+  const reading = mergeReading(a.reading, b.reading);
   return {
     schemaVersion: SCHEMA_VERSION,
     bookId: a.bookId,
@@ -74,6 +71,8 @@ export function mergeDocuments(a: BookSyncDocument, b: BookSyncDocument): BookSy
     position,
     namedPages: mergeItems(a.namedPages, b.namedPages),
     annotations: mergeItems(a.annotations, b.annotations),
+    // 記録が1つもないときは、項目ごと省く(古いデータと同じ形に保つ)
+    ...(reading.startedAt || reading.finishedAt ? { reading } : {}),
   };
 }
 
@@ -103,6 +102,7 @@ export function countUnsynced(
   for (const [k, t] of Object.entries(local.settingsUpdatedAt)) {
     if (base?.settingsUpdatedAt[k as BookSettingsKey] !== t) n++;
   }
+  n += readingChanges(local.reading, base?.reading);
   if (includePosition && positionPending(local, base)) n++;
   return n;
 }

@@ -124,6 +124,20 @@ export interface Memo extends AnnotationBase {
 
 export type Annotation = HighlightRect | HighlightStroke | Memo;
 
+/** 読書の記録の日付1件。date は YYYY-MM-DD(端末の暦)。null は「消した」 */
+export interface ReadingDate {
+  date: string | null;
+  updatedAt: number;
+  /** 手で入れた・直した値か。false は、自動(初めて開いた日)の値 */
+  manual: boolean;
+}
+
+/** 読み始めた日と読了日。4章の形式への追加(省略可。古いデータには無い) */
+export interface ReadingRecord {
+  startedAt?: ReadingDate;
+  finishedAt?: ReadingDate;
+}
+
 /** ドライブのアプリ専用領域に、本1冊につき1ファイルで保存する同期データ */
 export interface BookSyncDocument {
   schemaVersion: typeof SCHEMA_VERSION;
@@ -134,6 +148,8 @@ export interface BookSyncDocument {
   position: ReadingPosition | null;
   namedPages: NamedPage[];
   annotations: Annotation[];
+  /** 読み始めた日・読了日(第5回で追加。無い場合は記録なし) */
+  reading?: ReadingRecord;
 }
 
 export function newBookSyncDocument(bookId: string): BookSyncDocument {

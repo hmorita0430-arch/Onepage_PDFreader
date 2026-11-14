@@ -13,7 +13,16 @@ import {
   type Margins,
 } from './model/crop';
 import { parseThemeMode, resolveTheme, THEME_COLOR, THEME_KEY, type ThemeMode } from './model/theme';
-import { formatShownLabel, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown, type ViewSpec } from './model/layout';
+import {
+  isFinished,
+  isValidDate,
+  localDateString,
+  readingSummary,
+  setFinished,
+  setStarted,
+  stampStarted,
+} from './model/reading';
+import { formatShownLabel, isLastPage, groupAt, nextIndex, normalizeIndex, prevIndex, type Shown, type ViewSpec } from './model/layout';
 import { buildPageList, clampIndex, findIndex, formatPageLabel, regionOf, type LogicalPage } from './model/pages';
 import { loadBase, loadBookDocument, saveBase, saveBookDocument } from './model/storage';
 import { keyAction, tapZone } from './model/tap';
@@ -247,9 +256,15 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   if (isSyncable(bookId) && auth.currentToken()) {
     await Promise.race([syncNow(), new Promise<void>((r) => setTimeout(r, 5000))]);
   }
+  if (stampStarted((doc.reading ??= {}), Date.now())) {
+    saveBookDocument(doc); // 初めて開いた日を、読み始めた日にする
+    markDirty();
+  }
   renderSyncStatus();
   positionDirty = !doc.position; // 初めて開く本だけ、開いた位置を保存する。それ以外は、移動するまで保存しない
   syncSettingsForm();
+  finishDismissed = false;
+  hideFinishPrompt();
   pages = buildPageList(viewer.numPages, doc.settings);
   index = doc.position ? findIndex(pages, doc.position.page) : 0; // N-1: 最後に読んだ位置から開く
   view = { ...RESET_VIEW };
@@ -262,6 +277,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
 /** @param viaBack ブラウザの「戻る」で閉じる場合。履歴は、ブラウザがすでに1つ戻している */
 function closeBook(viaBack = false): void {
   clearTimeout(introTimer);
+  hideFinishPrompt();
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
@@ -454,6 +470,7 @@ function go(target: number): void {
   // ズーム維持でなければ、ページを送るたびにフィット表示へ戻る(D-9)
   if (!doc.settings.zoomKeep) view = { ...RESET_VIEW };
   void renderCurrent();
+  maybeAskFinish(); // 自分の操作で最後のページに着いたときだけ尋ねる(開いた直後は尋ねない)
 }
 
 const goNext = () => go(nextIndex(pages, index, isDouble()));
@@ -642,6 +659,8 @@ function applyMerged(bookId: string, result: BookSyncDocument): Incoming {
     syncSettingsForm();
     if (pages.length > 0) rebuildPages();
   }
+  syncReadingForm(); // 他の端末で入れた読書の記録を、設定に反映する
+  if (isFinished(doc.reading)) hideFinishPrompt();
   nav.refresh();
   annot.render();
   return incoming;
@@ -902,7 +921,95 @@ function syncSettingsForm(): void {
   zoomKeepChk.checked = s.zoomKeep;
   serialIn.value = s.printedNumber ? String(s.printedNumber.serial) : '';
   printedIn.value = s.printedNumber ? String(s.printedNumber.printed) : '';
+  syncReadingForm();
 }
+
+// ---------- 読書の記録(読み始めた日・読了日) ----------
+
+const startedIn = $<HTMLInputElement>('set-started');
+const finishedIn = $<HTMLInputElement>('set-finished');
+const readingSummaryEl = $('reading-summary');
+const readingErrorEl = $('reading-error');
+const finishPrompt = $('finish-prompt');
+let finishDismissed = false; // この本を開いている間、「あとで」と答えた
+
+function syncReadingForm(): void {
+  if (!doc) return;
+  startedIn.value = doc.reading?.startedAt?.date ?? '';
+  finishedIn.value = doc.reading?.finishedAt?.date ?? '';
+  const summary = readingSummary(doc.reading);
+  readingSummaryEl.textContent = summary ? `記録: ${summary}` : '記録: まだありません';
+  startedIn.max = finishedIn.max = localDateString(Date.now());
+}
+
+function showReadingError(msg: string): void {
+  readingErrorEl.textContent = msg;
+  readingErrorEl.hidden = msg === '';
+}
+
+/** 手で入れた日付を検査して保存する。問題があれば、理由を出して元の値に戻す */
+function commitReadingDate(kind: 'started' | 'finished', value: string): void {
+  if (!doc) return;
+  const reading = (doc.reading ??= {});
+  const date = value === '' ? null : value;
+  const next = {
+    started: kind === 'started' ? date : (reading.startedAt?.date ?? null),
+    finished: kind === 'finished' ? date : (reading.finishedAt?.date ?? null),
+  };
+  let error = '';
+  if (date !== null && !isValidDate(date)) error = '日付の形式が正しくありません。';
+  else if (date !== null && date > localDateString(Date.now())) error = '今日より先の日付は入れられません。';
+  else if (next.started && next.finished && next.finished < next.started) error = '読了日は、読み始めた日と同じか、それより後にしてください。';
+  showReadingError(error);
+  if (error) {
+    syncReadingForm(); // 元の値に戻す
+    return;
+  }
+  const now = Date.now();
+  if (kind === 'started') setStarted(reading, date, now);
+  else setFinished(reading, date, now);
+  if (kind === 'finished' && date) hideFinishPrompt();
+  saveBookDocument(doc);
+  markDirty();
+  syncReadingForm();
+}
+
+startedIn.addEventListener('change', () => commitReadingDate('started', startedIn.value));
+finishedIn.addEventListener('change', () => commitReadingDate('finished', finishedIn.value));
+$('finished-today').addEventListener('click', () => commitReadingDate('finished', localDateString(Date.now())));
+
+// 最後のページに、自分の操作で着いたとき、「読了にしますか?」と尋ねる(はいと答えたときだけ記録する)
+const finishText = $('finish-text');
+const finishButtons = [$('finish-yes'), $('finish-later')];
+function hideFinishPrompt(): void {
+  finishPrompt.hidden = true;
+  finishText.textContent = '最後のページです。読了にしますか?';
+  finishButtons.forEach((b) => (b.hidden = false));
+}
+function maybeAskFinish(): void {
+  if (!doc || finishDismissed || isFinished(doc.reading) || cropping) return;
+  if (!isLastPage(pages, index, isDouble())) {
+    hideFinishPrompt();
+    return;
+  }
+  finishPrompt.hidden = false;
+}
+$('finish-yes').addEventListener('click', () => {
+  if (!doc) return;
+  setFinished((doc.reading ??= {}), localDateString(Date.now()), Date.now());
+  saveBookDocument(doc);
+  markDirty();
+  syncReadingForm();
+  // 確認の表示を、記録した旨に置き換えて、少ししたら消す
+  finishText.textContent = `読了日を記録しました(${localDateString(Date.now())})。本の設定で直せます。`;
+  finishButtons.forEach((b) => (b.hidden = true));
+  finishPrompt.hidden = false;
+  setTimeout(hideFinishPrompt, 3500);
+});
+$('finish-later').addEventListener('click', () => {
+  finishDismissed = true;
+  hideFinishPrompt();
+});
 
 /** 設定を1項目更新し、項目ごとの更新日時を記録して保存する(同期で「項目ごとに新しい方」を採るため)。 */
 function updateSetting<K extends keyof BookSettings>(key: K, value: BookSettings[K]): void {
@@ -1314,6 +1421,13 @@ async function refreshLibrary(): Promise<void> {
       sub.className = 'sub';
       sub.textContent = `${fmtSize(b.size)} ・ 最後に開いた日: ${fmtDate(b.lastOpenedAt)}`;
       text.append(name, sub);
+      const record = readingSummary(loadBookDocument(b.bookId).reading);
+      if (record) {
+        const rec = document.createElement('div');
+        rec.className = 'sub';
+        rec.textContent = `読書の記録: ${record}`;
+        text.append(rec);
+      }
       const open = document.createElement('button');
       open.type = 'button';
       open.textContent = '開く';

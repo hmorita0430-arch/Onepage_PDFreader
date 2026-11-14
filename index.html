@@ -94,6 +94,11 @@
       </header>
 
       <div id="sync-badge" class="sync-badge" role="status" aria-live="polite"></div>
+      <div id="finish-prompt" class="finish-prompt" hidden role="alertdialog" aria-label="読了の確認">
+        <span id="finish-text">最後のページです。読了にしますか?</span>
+        <button id="finish-yes" class="primary" type="button">読了にする</button>
+        <button id="finish-later" type="button">あとで</button>
+      </div>
       <div id="sync-hint" class="sync-hint" hidden role="status">
         <span id="sync-hint-text"></span>
         <button id="sync-hint-go" type="button">移動</button>
@@ -142,6 +147,18 @@
           <label class="inline">通し番号 <input id="set-serial" type="number" min="1" inputmode="numeric" /></label>
           <label class="inline">= 印刷p. <input id="set-printed" type="number" inputmode="numeric" /></label>
           <button id="clear-printed" class="link" type="button">対応を消す</button>
+        </fieldset>
+        <fieldset>
+          <legend>読書の記録</legend>
+          <label for="set-started">読み始めた日(初めて開いた日が、自動で入ります)</label>
+          <input id="set-started" type="date" />
+          <label for="set-finished">読了日(最後のページで確認します。手でも入れられます)</label>
+          <div class="date-row">
+            <input id="set-finished" type="date" />
+            <button id="finished-today" class="secondary" type="button">今日にする</button>
+          </div>
+          <p id="reading-summary" class="muted"></p>
+          <p id="reading-error" class="error" hidden role="alert"></p>
         </fieldset>
         <fieldset>
           <legend>注釈の書き出し</legend>

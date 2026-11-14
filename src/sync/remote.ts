@@ -1,4 +1,5 @@
 import { createBookFile, findBookFile, getVersion, readJson, updateBookFile } from '../drive/appdata';
+import { sanitizeReading } from '../model/reading';
 import { SCHEMA_VERSION, type BookSyncDocument } from '../model/types';
 import { mergeDocuments, stableStringify } from './merge';
 
@@ -23,6 +24,8 @@ export function parseRemote(json: unknown, bookId: string): BookSyncDocument {
     position: r.position ?? null,
     namedPages: r.namedPages ?? [],
     annotations: r.annotations ?? [],
+    // 読書の記録(第5回で追加)。無い・壊れている場合は、記録なしとして扱う
+    ...(sanitizeReading(r.reading) ? { reading: sanitizeReading(r.reading) } : {}),
   };
 }
 

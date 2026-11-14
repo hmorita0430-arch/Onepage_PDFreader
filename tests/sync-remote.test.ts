@@ -78,6 +78,21 @@ describe('syncBook', () => {
     expect([...d.files.values()][0]!.version).toBe(1);
   });
 
+  it('読書の記録(読み始め・読了)が、ドライブを経由して他の端末に届く', async () => {
+    const d = fakeDrive();
+    const a = mk('A', 'a', 100);
+    a.reading = { startedAt: { date: '2026-11-05', updatedAt: 100, manual: false }, finishedAt: { date: '2026-11-14', updatedAt: 300, manual: true } };
+    await syncBook(a, 'tok', d.fn);
+    expect(d.remoteDoc().reading?.finishedAt?.date).toBe('2026-11-14');
+    const b = mk('B', 'b', 110);
+    b.reading = { startedAt: { date: '2026-11-03', updatedAt: 200, manual: false } };
+    const rb = await syncBook(b, 'tok', d.fn);
+    expect(rb.merged.reading?.startedAt?.date).toBe('2026-11-03'); // 早い方
+    expect(rb.merged.reading?.finishedAt?.date).toBe('2026-11-14'); // Aの読了日が届く
+    const ra = await syncBook(a, 'tok', d.fn);
+    expect(ra.merged.reading?.startedAt?.date).toBe('2026-11-03');
+  });
+
   it('2台が別々にしおりを足しても、どちらも残る(受け入れ基準)', async () => {
     const d = fakeDrive();
     const a = mk('Aのしおり', 'a', 100);

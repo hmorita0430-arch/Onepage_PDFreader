@@ -25,6 +25,12 @@ export function sheetRange(list: LogicalPage[], index: number): [number, number]
   return [first, last];
 }
 
+/** 表示中のページが、本の最後か(2ページ表示では、最後の見開き) */
+export function isLastPage(list: LogicalPage[], index: number, double: boolean): boolean {
+  if (list.length === 0) return false;
+  return (double ? sheetRange(list, index)[1] : index) >= list.length - 1;
+}
+
 /** 2ページ表示では、見開きの先頭ページに揃える */
 export function normalizeIndex(list: LogicalPage[], index: number, double: boolean): number {
   return double ? sheetRange(list, index)[0] : index;
