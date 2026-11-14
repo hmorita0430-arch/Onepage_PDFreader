@@ -841,9 +841,9 @@ $('open-ann').addEventListener('click', () => {
 
 attachGestures(stageEl, {
   ...annot.draw, // 描画ツールの使用中は、タップによるページ送りを行わない(O-4)
-  // 読書中の長押し(タッチ)で、その場にメモを置く。右クリック(マウス)で、メモ・蛍光ペンのメニューを出す
+  // 読書中の長押し(タッチ)・右クリック(マウス)で、メモ・蛍光ペンのメニューを出す(同じメニュー)
   onLongPress: (x, y) => {
-    if (doc && !cropping && !annot.isActive() && !nav.isOpen()) annot.placeMemoAt(x, y);
+    if (doc && !cropping && !annot.isActive() && !nav.isOpen()) annot.openContextMenu(x, y);
   },
   onContextMenu: (x, y) => {
     if (doc && !cropping && !nav.isOpen()) annot.openContextMenu(x, y);

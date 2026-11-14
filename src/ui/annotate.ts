@@ -434,6 +434,11 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   // ---- 右クリックメニュー(読書中に、注釈モードに入らず付ける) ----
   let menuPoint = { x: 0, y: 0 };
+  // 長押しでメニューが指の下に出たとき、指を離した操作(ブラウザが click を発生させる)で、項目を選んだことにしない。
+  // メニューの上で、新しく触れた(pointerdown)あとの click だけを受け付ける。キーボード操作(click の detail=0)は、そのまま受け付ける。
+  let menuArmed = false;
+  menu.addEventListener('pointerdown', () => (menuArmed = true), true);
+  const strayClick = (e: MouseEvent): boolean => e.detail > 0 && !menuArmed;
   const onOutside = (e: Event) => {
     if (menu.contains(e.target as Node)) return;
     closeMenu();
@@ -443,6 +448,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   function openContextMenu(x: number, y: number): void {
     menuPoint = { x, y };
+    menuArmed = false;
     menu.hidden = false;
     const parent = menu.offsetParent as HTMLElement | null;
     const maxX = (parent?.clientWidth ?? window.innerWidth) - menu.offsetWidth - 8;
@@ -466,7 +472,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   function beginOneShot(t: DrawTool): void {
     closeMenu();
     oneShot = t;
-    oneShotHint.textContent = (t === 'rect' ? 'ドラッグで四角く囲みます' : 'なぞって線を引きます') + '(Escで中止)';
+    oneShotHint.textContent = (t === 'rect' ? 'ドラッグで四角く囲みます' : 'なぞって線を引きます') + '(Escまたは「戻る」で中止)';
     oneShotHint.hidden = false;
   }
 
@@ -478,7 +484,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   }
 
   for (const b of menu.querySelectorAll<HTMLButtonElement>('[data-ctx]')) {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', (e) => {
+      if (strayClick(e)) return; // 指を離しただけの click は無視する
       const act = b.dataset.ctx;
       if (act === 'memo') {
         closeMenu();
@@ -490,7 +497,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   }
   for (const b of menuColorButtons) {
     b.style.setProperty('--swatch', COLORS[b.dataset.ctxColor as AnnotationColor].css);
-    b.addEventListener('click', () => {
+    b.addEventListener('click', (e) => {
+      if (strayClick(e)) return;
       color = b.dataset.ctxColor as AnnotationColor;
       write(COLOR_STORE, color);
       renderMenuColors();
