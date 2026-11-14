@@ -18,6 +18,10 @@
       <h1>見開きリーダー</h1>
       <p class="lead">見開きで撮影したPDFを、1ページずつ読みやすく表示します。</p>
 
+      <button id="continue-book" class="primary continue" type="button" hidden>
+        <span>続きから読む</span>
+        <span id="continue-name" class="continue-name"></span>
+      </button>
       <button id="open-drive" class="primary" type="button">Googleドライブから開く</button>
       <button id="open-local" class="secondary" type="button" hidden>端末のPDFを開く(開発用)</button>
       <input id="local-input" type="file" accept="application/pdf" hidden />
@@ -30,7 +34,15 @@
       <p id="version" class="muted"></p>
 
       <section class="library" aria-labelledby="library-title">
-        <h2 id="library-title">端末に保存した本</h2>
+        <div class="library-head">
+          <h2 id="library-title">端末に保存した本</h2>
+          <label class="sort">並べ替え
+            <select id="library-sort">
+              <option value="recent">最近順</option>
+              <option value="name">名前順</option>
+            </select>
+          </label>
+        </div>
         <ul id="library-list" class="library-list"></ul>
         <p id="library-empty" class="muted">まだありません。ドライブから開いた本は、自動で端末に保存されます。</p>
         <p id="storage-info" class="muted"></p>
@@ -69,7 +81,10 @@
       </footer>
 
       <aside id="settings" class="settings" hidden aria-label="本の設定">
-        <h2>本の設定</h2>
+        <div class="settings-head">
+          <h2>本の設定</h2>
+          <button id="close-settings-x" class="icon" type="button" aria-label="設定を閉じる">✕</button>
+        </div>
         <label>開き方向
           <select id="set-direction">
             <option value="rtl">右開き(右ページが先)</option>

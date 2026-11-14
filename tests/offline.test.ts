@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { AuthExpiredError, CHUNK_SIZE, downloadResumable, fetchFileInfo } from '../src/drive/download';
-import { deleteBook, getBlob, getMeta, listBooks, saveBook, touchBook } from '../src/offline/library';
+import { deleteBook, getBlob, getMeta, latestBook, listBooks, saveBook, sortBooks, touchBook, type BookMeta } from '../src/offline/library';
 import { getPartial } from '../src/offline/partials';
 
 const bytes = (n: number) => Uint8Array.from({ length: n }, (_, i) => i % 251);
@@ -104,5 +104,33 @@ describe('fetchFileInfo', () => {
     expect(await fetchFileInfo('id', 't', ok)).toEqual({ name: 'x.pdf', size: 42, md5: 'h' });
     const expired = (async () => new Response('', { status: 401 })) as unknown as typeof fetch;
     await expect(fetchFileInfo('id', 't', expired)).rejects.toBeInstanceOf(AuthExpiredError);
+  });
+});
+
+const book = (name: string, lastOpenedAt: number, savedAt = 1): BookMeta => ({ bookId: name, name, size: 1, md5: null, savedAt, lastOpenedAt });
+
+describe('保存した本の並べ替えと「続きから読む」', () => {
+  const list = [book('b本', 200), book('a本', 100), book('c本', 300)];
+  it('最近順: 最後に開いた順', () => {
+    expect(sortBooks(list, 'recent').map((b) => b.name)).toEqual(['c本', 'b本', 'a本']);
+  });
+  it('名前順: 名前の順', () => {
+    expect(sortBooks(list, 'name').map((b) => b.name)).toEqual(['a本', 'b本', 'c本']);
+  });
+  it('名前順: 数字は大きさの順(2巻 < 10巻)、日本語は読みの順', () => {
+    const l = [book('本 10巻', 1), book('本 2巻', 2), book('あ本', 3), book('い本', 4)];
+    expect(sortBooks(l, 'name').map((b) => b.name)).toEqual(['あ本', 'い本', '本 2巻', '本 10巻']);
+  });
+  it('元の配列は変えない', () => {
+    const copy = [...list];
+    sortBooks(list, 'name');
+    expect(list).toEqual(copy);
+  });
+  it('同時刻なら、保存した順で安定', () => {
+    expect(sortBooks([book('x', 5, 1), book('y', 5, 2)], 'recent').map((b) => b.name)).toEqual(['y', 'x']);
+  });
+  it('続きから読む: 最後に開いた本。本が無ければ undefined', () => {
+    expect(latestBook(list)?.name).toBe('c本');
+    expect(latestBook([])).toBeUndefined();
   });
 });

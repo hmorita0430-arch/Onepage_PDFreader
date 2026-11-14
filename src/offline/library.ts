@@ -50,6 +50,23 @@ export async function deleteBook(bookId: string): Promise<void> {
   });
 }
 
+export type LibrarySort = 'recent' | 'name';
+
+/**
+ * 保存した本の並べ替え。最近順は最後に開いた順、名前順は日本語の読みの順(数字は大きさの順: 2巻 < 10巻)。
+ * 元の配列は変えない。
+ */
+export function sortBooks(books: readonly BookMeta[], mode: LibrarySort): BookMeta[] {
+  const copy = [...books];
+  if (mode === 'name') return copy.sort((a, b) => a.name.localeCompare(b.name, 'ja', { numeric: true }) || a.savedAt - b.savedAt);
+  return copy.sort((a, b) => b.lastOpenedAt - a.lastOpenedAt || b.savedAt - a.savedAt);
+}
+
+/** 「続きから読む」の対象: 最後に開いた本。無ければ undefined */
+export function latestBook(books: readonly BookMeta[]): BookMeta | undefined {
+  return sortBooks(books, 'recent')[0];
+}
+
 export interface StorageInfo {
   /** このサイト全体の使用量(バイト)。取れなければ null */
   usage: number | null;

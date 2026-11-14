@@ -302,3 +302,16 @@ button.icon {
 .bar.top > .conn.small { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; overflow: hidden; }
 .bar.top .conn.small > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar.top .conn.small button.link { flex: none; padding: 0 4px; }
+
+button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
+.continue-name { display: block; font-weight: 400; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.library-head h2 { margin: 0; }
+.library-head .sort { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.85rem; }
+.library-head select { min-height: 36px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--muted); border-radius: 8px; padding: 0 6px; }
+.settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.settings-head h2 { margin: 0; }
+.settings-head button.icon { margin-right: -8px; }
+
+/* 横方向の動きは、スワイプで閉じる操作のために、ブラウザに奪わせない(縦スクロールは今までどおり) */
+.settings { touch-action: pan-y; }

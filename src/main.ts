@@ -21,11 +21,14 @@ import {
   deleteBook,
   getBlob,
   getMeta,
+  latestBook,
   listBooks,
   requestPersistence,
   saveBook,
+  sortBooks,
   storageInfo,
   touchBook,
+  type LibrarySort,
 } from './offline/library';
 import { countUnsynced, incomingChanges, mergeDocuments, positionPending, type Incoming } from './sync/merge';
 import { isSyncable, syncBook } from './sync/remote';
@@ -251,10 +254,12 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   setMenuVisible(false);
   armAutoReconnect();
   await renderCurrent();
+  showIntroMenu(); // 開いた直後に、数秒だけ、メニューとページ番号を見せる
 }
 
 /** @param viaBack ブラウザの「戻る」で閉じる場合。履歴は、ブラウザがすでに1つ戻している */
 function closeBook(viaBack = false): void {
+  clearTimeout(introTimer);
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
@@ -429,11 +434,33 @@ function go(target: number): void {
 const goNext = () => go(nextIndex(pages, index, isDouble()));
 const goPrev = () => go(prevIndex(pages, index, isDouble()));
 
-function setMenuVisible(visible: boolean): void {
+/** @param auto 自動(開いた直後の表示の自動非表示)による切り替え。利用者の操作なら、自動非表示を取り消す */
+function setMenuVisible(visible: boolean, auto = false): void {
+  if (!auto) clearTimeout(introTimer);
   topbar.hidden = !visible;
   bottombar.hidden = !visible;
   if (!visible) settingsEl.hidden = true;
 }
+
+// ---------- 開いた直後のメニュー(数秒だけ) ----------
+
+const INTRO_MENU_MS = 3000;
+let introTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * 本を開いた直後の数秒だけ、メニュー(上下のバー)とページ番号を出して、自動で隠す。
+ * 利用者がメニューに触れた(タップ・押下・キー操作・画面を開く)ら、自動では隠さない。
+ */
+function showIntroMenu(): void {
+  setMenuVisible(true, true);
+  clearTimeout(introTimer);
+  introTimer = setTimeout(() => {
+    if (!doc || topbar.hidden) return;
+    if (!settingsEl.hidden || nav.isOpen() || annot.isActive() || cropping) return; // 何か開いていれば、隠さない
+    setMenuVisible(false, true);
+  }, INTRO_MENU_MS);
+}
+for (const el of [topbar, bottombar, settingsEl]) el.addEventListener('pointerdown', () => clearTimeout(introTimer));
 
 // ---------- 最後に読んだ位置(N-1) ----------
 
@@ -1014,6 +1041,27 @@ $('disconnect').addEventListener('click', () => {
   renderSyncStatus();
 });
 $('close-settings').addEventListener('click', () => (settingsEl.hidden = true));
+$('close-settings-x').addEventListener('click', () => (settingsEl.hidden = true));
+
+// 設定を、右へのスワイプで閉じる。縦スクロールを優先し(横の動きが縦の2倍以上のときだけ)、
+// スライダー・入力欄・選択欄の上で始めた操作は対象にしない(それらの操作を妨げない)。
+const SWIPE_CLOSE_PX = 80;
+let settingsSwipe: { x: number; y: number; id: number } | null = null;
+settingsEl.addEventListener('pointerdown', (e) => {
+  settingsSwipe = null;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if ((e.target as HTMLElement).closest('input, select, textarea')) return;
+  settingsSwipe = { x: e.clientX, y: e.clientY, id: e.pointerId };
+});
+settingsEl.addEventListener('pointerup', (e) => {
+  const s = settingsSwipe;
+  settingsSwipe = null;
+  if (!s || s.id !== e.pointerId) return;
+  const dx = e.clientX - s.x;
+  const dy = e.clientY - s.y;
+  if (dx >= SWIPE_CLOSE_PX && Math.abs(dx) > Math.abs(dy) * 2) settingsEl.hidden = true;
+});
+settingsEl.addEventListener('pointercancel', () => (settingsSwipe = null)); // ブラウザが縦スクロールを始めた等
 $('back').addEventListener('click', () => closeBook());
 
 // ---------- 余白の設定(D-5) ----------
@@ -1153,6 +1201,32 @@ const MB = 1024 * 1024;
 const fmtSize = (bytes: number) => (bytes >= 1024 * MB ? `${(bytes / 1024 / MB).toFixed(1)} GB` : `${(bytes / MB).toFixed(1)} MB`);
 const fmtDate = (t: number) => new Date(t).toLocaleDateString('ja-JP');
 
+const SORT_KEY = 'library-sort:v1';
+let librarySort: LibrarySort = (() => {
+  try {
+    return localStorage.getItem(SORT_KEY) === 'name' ? 'name' : 'recent';
+  } catch {
+    return 'recent';
+  }
+})();
+const sortSel = $<HTMLSelectElement>('library-sort');
+sortSel.value = librarySort;
+sortSel.addEventListener('change', () => {
+  librarySort = sortSel.value === 'name' ? 'name' : 'recent';
+  try {
+    localStorage.setItem(SORT_KEY, librarySort);
+  } catch {
+    /* 保存できなくても、この回は反映される */
+  }
+  void refreshLibrary();
+});
+
+const continueBtn = $<HTMLButtonElement>('continue-book');
+let continueId: string | null = null;
+continueBtn.addEventListener('click', () => {
+  if (continueId) void openSaved(continueId);
+});
+
 async function refreshLibrary(): Promise<void> {
   const list = $('library-list');
   const empty = $('library-empty');
@@ -1166,8 +1240,15 @@ async function refreshLibrary(): Promise<void> {
     empty.hidden = false;
     return;
   }
+  // 「続きから読む」: 最後に開いた本。ある間は、ドライブから開くボタンを控えめな見た目にする
+  const last = latestBook(books);
+  continueId = last?.bookId ?? null;
+  continueBtn.hidden = !last;
+  if (last) $('continue-name').textContent = `${last.name} ・ 最後に開いた日: ${fmtDate(last.lastOpenedAt)}`;
+  openDriveBtn.classList.toggle('primary', !last);
+  openDriveBtn.classList.toggle('secondary', Boolean(last));
   list.replaceChildren(
-    ...books.map((b) => {
+    ...sortBooks(books, librarySort).map((b) => {
       const li = document.createElement('li');
       const text = document.createElement('div');
       text.className = 'info';
