@@ -123,6 +123,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const quickText = el('oneshot-text');
   const quickUndo = el<HTMLButtonElement>('quick-undo');
   const quickColorButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-color]')];
+  const quickToolButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-tool]')];
+  const quickDelete = el<HTMLButtonElement>('quick-delete');
   const selBar = el('sel-bar');
   const selUndo = el<HTMLButtonElement>('sel-undo');
   const selColorButtons = [...selBar.querySelectorAll<HTMLButtonElement>('[data-sel-color]')];
@@ -558,26 +560,59 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     }
   }
 
-  // ---- 続けて引く(長押し・右クリックのメニューから) ----
+  // ---- 続けて引く・選んで直す(長押し・右クリックのメニューから。同じバーで切り替える) ----
+  const sessionOn = (): boolean => oneShot !== null || selecting;
+
   function armQuickIdle(): void {
     clearTimeout(quickTimer);
     quickTimer = setTimeout(() => {
-      if (!oneShot) return;
+      if (!oneShot) return; // 選んで直している間は、自動では戻さない
       if (drag) return armQuickIdle(); // 描いている最中は、戻さない
-      finishOneShot();
+      endSession();
     }, QUICK_IDLE_MS);
   }
 
-  function finishOneShot(): void {
-    if (!oneShot) return;
+  /** 続けて引く・選ぶ、の状態を、すべて終える(通常の読書に戻る) */
+  function endSession(): void {
+    const was = sessionOn();
     oneShot = null;
     clearTimeout(quickTimer);
+    endSelection();
     quickBar.hidden = true;
-    renderBar();
+    if (was) renderBar();
+  }
+
+  function quickMessage(): string {
+    if (selecting) {
+      return selectedId
+        ? '●をドラッグして伸ばす・縮める。✥で動かす。色も変えられます。「完了」か「戻る」で終わります'
+        : '蛍光ペンをタップして選びます。選んだら、●で伸ばす・縮める、✥で動かせます。「完了」か「戻る」で終わります';
+    }
+    return (
+      (oneShot === 'rect' ? 'ドラッグで四角く囲みます。' : 'なぞって線を引きます。') +
+      `続けて引けます。${QUICK_IDLE_MS / 1000}秒引かないと、自動で戻ります。「完了」か「戻る」でも終わります`
+    );
+  }
+
+  /** バーの表示(いまの操作・色・消すボタン・戻す)を、状態に合わせる */
+  function syncQuickBar(): void {
+    quickBar.hidden = !sessionOn();
+    if (quickBar.hidden) return;
+    quickText.textContent = quickMessage();
+    for (const b of quickToolButtons) {
+      const t = b.dataset.quickTool;
+      b.setAttribute('aria-pressed', String(t === 'select' ? selecting : t === oneShot));
+    }
+    // 蛍光ペンを選んでいる間は、色は、その蛍光ペンの色。それ以外は、新しく引く色
+    const doc = deps.getDoc();
+    const sel = selecting && doc ? findSelected(doc) : null;
+    for (const b of quickColorButtons) b.setAttribute('aria-pressed', String(b.dataset.quickColor === (sel ? sel.color : color)));
+    quickDelete.hidden = !sel;
+    quickUndo.disabled = undoStack.length === 0;
   }
 
   function renderQuickColors(): void {
-    for (const b of quickColorButtons) b.setAttribute('aria-pressed', String(b.dataset.quickColor === color));
+    syncQuickBar();
   }
 
   // ---- 蛍光ペンを選ぶ(動かす・伸ばす・縮める・消す・色を変える) ----
@@ -586,12 +621,14 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   function syncSelUi(): void {
     const doc = deps.getDoc();
     const a = doc ? findSelected(doc) : null;
-    selBar.hidden = !a;
+    // 長押しからの操作は、下のバーに統合した。注釈モードの「選ぶ」ツールのときだけ、この操作バーを使う
+    selBar.hidden = !a || selecting;
     // 注釈ツールバーが出ているときは、その上に重ねる
     selBar.style.bottom = active && !bar.hidden ? `${bar.offsetHeight + 8}px` : '';
     for (const b of selColorButtons) b.setAttribute('aria-pressed', String(!!a && a.color === b.dataset.selColor));
     el('sel-text').textContent = SEL_TEXT;
     selUndo.disabled = undoStack.length === 0;
+    syncQuickBar();
   }
 
   function endSelection(rerender = true): void {
@@ -604,8 +641,13 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     if (had && rerender) render();
   }
 
-  function startSelection(id: string): void {
-    finishOneShot();
+  /** 選ぶ状態にする。id があれば、その蛍光ペンを選んだ状態から始める */
+  function startSelection(id: string | null): void {
+    oneShot = null;
+    clearTimeout(quickTimer);
+    drag = null;
+    preview?.remove();
+    preview = null;
     selecting = !active; // 注釈モードのときは、「選ぶ」ツールの動きになる
     selectedId = id;
     render();
@@ -617,18 +659,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     const tol = 12 * unitsPerPx(g);
     const hits = visibleAnnotations(doc.annotations).filter((a) => a.page.pdfPage === g.spec.pdfPage && a.kind !== 'memo' && hitHighlight(a, p, tol, g.page));
     const top = hits[hits.length - 1];
-    if (top) {
-      selectedId = top.id;
-      render();
-      syncSelUi();
-      return;
-    }
-    if (selecting) endSelection(); // 長押しから入った選択は、何もない所のタップで終わる
-    else {
-      selectedId = null;
-      selBar.hidden = true;
-      render();
-    }
+    selectedId = top ? top.id : null; // 何もない所のタップは、選択を外すだけ(長押しからの状態は、「完了」まで続く)
+    render();
+    syncSelUi();
   }
 
   function setSelectedColor(c: AnnotationColor): void {
@@ -655,12 +688,17 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     undo();
     syncSelUi();
   });
-  el('sel-delete').addEventListener('click', () => {
+  function deleteSelected(): void {
     if (!selectedId) return;
     const id = selectedId;
-    endSelection(false);
+    // 長押しからの状態では、選んだ状態だけを外し、続けて選べるようにする。注釈モードでも同じ
+    selectedId = null;
+    live = null;
     deleteHighlight(id);
-  });
+    syncSelUi();
+  }
+  el('sel-delete').addEventListener('click', deleteSelected);
+  quickDelete.addEventListener('click', deleteSelected);
   el('sel-done').addEventListener('click', () => endSelection());
 
   function onDrawEnd(x: number, y: number, cancelled: boolean): void {
@@ -836,16 +874,16 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     for (const b of menuColorButtons) b.setAttribute('aria-pressed', String(b.dataset.ctxColor === color));
   }
 
+  /** 続けて引く状態にする(選んでいたら、選択は外す) */
   function beginOneShot(t: DrawTool): void {
     closeMenu();
-    endSelection();
+    if (selecting || selectedId !== null) endSelection();
+    drag = null;
+    preview?.remove();
+    preview = null;
     oneShot = t;
-    quickText.textContent =
-      (t === 'rect' ? 'ドラッグで四角く囲みます。' : 'なぞって線を引きます。') +
-      `続けて引けます。${QUICK_IDLE_MS / 1000}秒引かないと、自動で戻ります。「完了」か「戻る」でも終わります`;
-    quickBar.hidden = false;
-    renderQuickColors();
     renderBar();
+    syncQuickBar();
     armQuickIdle();
   }
 
@@ -853,8 +891,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     drag = null;
     preview?.remove();
     preview = null;
-    finishOneShot();
-    endSelection();
+    endSession();
   }
 
   for (const b of menu.querySelectorAll<HTMLButtonElement>('[data-ctx]')) {
@@ -866,6 +903,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
         placeMemoAt(menuPoint.x, menuPoint.y);
       } else if (act === 'rect' || act === 'stroke') {
         beginOneShot(act);
+      } else if (act === 'selectmode') {
+        closeMenu();
+        startSelection(null); // 蛍光ペンの上でなくても、選ぶ状態にできる(細い線を、長押しで狙わなくてよい)
       } else if (act === 'select' && menuTarget) {
         const id = menuTarget;
         closeMenu();
@@ -915,6 +955,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     quickUndo.disabled = undoStack.length === 0;
     selUndo.disabled = undoStack.length === 0;
     hint.textContent = HINTS[tool] + COMMON_HINT;
+    syncQuickBar();
   }
   for (const b of toolButtons) {
     b.addEventListener('click', () => {
@@ -944,19 +985,31 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   for (const b of quickColorButtons) {
     b.style.setProperty('--swatch', COLORS[b.dataset.quickColor as AnnotationColor].css);
     b.addEventListener('click', () => {
-      color = b.dataset.quickColor as AnnotationColor;
+      const c = b.dataset.quickColor as AnnotationColor;
+      if (selecting && selectedId) {
+        setSelectedColor(c); // 蛍光ペンを選んでいる間は、その蛍光ペンの色を変える
+        return;
+      }
+      color = c;
       write(COLOR_STORE, color);
-      renderQuickColors();
       renderMenuColors();
       renderBar();
       if (oneShot) armQuickIdle();
     });
   }
+  for (const b of quickToolButtons) {
+    b.addEventListener('click', () => {
+      const t = b.dataset.quickTool;
+      if (t === 'select') startSelection(null);
+      else if (t === 'rect' || t === 'stroke') beginOneShot(t);
+    });
+  }
   quickUndo.addEventListener('click', () => {
     undo();
+    syncSelUi();
     if (oneShot) armQuickIdle();
   });
-  el('quick-done').addEventListener('click', () => finishOneShot());
+  el('quick-done').addEventListener('click', () => endSession());
   el('ann-prev').addEventListener('click', deps.prev);
   el('ann-next').addEventListener('click', deps.next);
   el('ann-done').addEventListener('click', () => exit());
@@ -989,8 +1042,10 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     drag = null;
     closeEditor();
     closeMenu();
-    finishOneShot();
+    oneShot = null;
+    clearTimeout(quickTimer);
     endSelection(false);
+    quickBar.hidden = true;
     undoStack.length = 0;
     redoStack.length = 0;
     bar.hidden = true;

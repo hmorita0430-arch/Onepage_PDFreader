@@ -334,6 +334,11 @@
       <!-- 長押しから蛍光ペンを選んだあと、続けて引くための小さなバー(画面の下) -->
       <div id="oneshot-hint" class="quick-bar" hidden role="group" aria-label="蛍光ペンを続けて引く">
         <span id="oneshot-text" class="quick-text" role="status"></span>
+        <span class="quick-modes" role="group" aria-label="操作の切り替え">
+          <button type="button" data-quick-tool="rect" aria-pressed="false">▭ 四角</button>
+          <button type="button" data-quick-tool="stroke" aria-pressed="false">〰 なぞる</button>
+          <button type="button" data-quick-tool="select" aria-pressed="false">✥ 選ぶ</button>
+        </span>
         <span class="quick-colors" role="group" aria-label="色">
           <button type="button" data-quick-color="yellow" aria-label="黄" aria-pressed="true"></button>
           <button type="button" data-quick-color="green" aria-label="緑" aria-pressed="false"></button>
@@ -341,6 +346,7 @@
           <button type="button" data-quick-color="blue" aria-label="青" aria-pressed="false"></button>
         </span>
         <button id="quick-undo" type="button" aria-label="元に戻す" disabled>↶ 戻す</button>
+        <button id="quick-delete" class="danger" type="button" hidden>消す</button>
         <button id="quick-done" class="primary" type="button">完了</button>
       </div>
 
@@ -372,6 +378,7 @@
         <button type="button" role="menuitem" data-ctx="memo">✎ ここにメモを置く</button>
         <button type="button" role="menuitem" data-ctx="rect">▭ 蛍光ペン(四角で囲む)</button>
         <button type="button" role="menuitem" data-ctx="stroke">〰 蛍光ペン(なぞる)</button>
+        <button type="button" role="menuitem" data-ctx="selectmode">✥ 蛍光ペンを選ぶ(動かす・伸ばす)</button>
         <span class="ctx-colors" role="group" aria-label="色">
           <button type="button" data-ctx-color="yellow" aria-label="黄" aria-pressed="true"></button>
           <button type="button" data-ctx-color="green" aria-label="緑" aria-pressed="false"></button>
