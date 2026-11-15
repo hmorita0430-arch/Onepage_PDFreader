@@ -19,6 +19,8 @@ export interface GestureHandlers {
   onContextMenu?(x: number, y: number): void;
   /** 描画ツールの使用中か */
   drawActive?(): boolean;
+  /** タッチ(指)で描くときの位置の補正(画面のピクセル)。測っていなければ、なし */
+  drawOffset?(): { x: number; y: number };
   onDrawStart?(x: number, y: number): void;
   onDrawMove?(x: number, y: number): void;
   /** cancelled: 2本目の指が触れた等で、描画を中止した */
@@ -61,6 +63,19 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
   const rel = (e: { clientX: number; clientY: number }) => {
     const r = el.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top, w: r.width, h: r.height };
+  };
+
+  /** 描画用の座標。指(タッチ)のときだけ、位置の補正を足す */
+  const relDraw = (e: { clientX: number; clientY: number; pointerType?: string }) => {
+    const p = rel(e);
+    if (e.pointerType === 'touch') {
+      const o = h.drawOffset?.();
+      if (o) {
+        p.x += o.x;
+        p.y += o.y;
+      }
+    }
+    return p;
   };
 
   const two = (): { dist: number; mid: { x: number; y: number } } => {
@@ -107,7 +122,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       // 描画ツール中は、1本指の操作を描画にする(Shift を押している間は、ズーム中の移動に使う)
       if (h.drawActive?.() && !e.shiftKey) {
         drawing = true;
-        const p = rel(e);
+        const p = relDraw(e);
         h.onDrawStart?.(p.x, p.y);
       } else if (e.pointerType !== 'mouse' && h.onLongPress) {
         // 長押し: ほとんど動かさずに押し続けたら、その場の操作(メモ)にする
@@ -123,7 +138,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       clearTimeout(longTimer);
       if (drawing) {
         drawing = false;
-        const p = rel(e);
+        const p = relDraw(e);
         h.onDrawEnd?.(p.x, p.y, true); // 2本目の指: 描画を中止してピンチ操作に切り替える
       }
       gesture.multi = true;
@@ -152,7 +167,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
       // 取りこぼした途中の点も使う(線がカクカクしないように)
       const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
       for (const ev of coalesced.length > 0 ? coalesced : [e]) {
-        const p = rel(ev);
+        const p = relDraw(ev);
         h.onDrawMove?.(p.x, p.y);
       }
       return;
@@ -177,7 +192,7 @@ export function attachGestures(el: HTMLElement, h: GestureHandlers): void {
     }
     if (drawing) {
       drawing = false;
-      const p = rel(e);
+      const p = relDraw(e);
       h.onDrawEnd?.(p.x, p.y, cancelled);
       return;
     }

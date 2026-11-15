@@ -7,15 +7,24 @@ import {
   addStroke,
   centerOf,
   deleteAnnotation,
+  geometryOf,
   hitHighlight,
+  movedGeometry,
   pointToNorm,
   rectFrom,
+  resizedRect,
   restoreAnnotation,
+  setAnnotationColor,
+  setAnnotationGeometry,
   sideAt,
   simplifyPoints,
   smoothPath,
+  stretchedStroke,
   updateMemoText,
   visibleAnnotations,
+  type Geometry,
+  type RectCorner,
+  type StrokeEnd,
   type StrokeThickness,
 } from '../model/annotations';
 import type { ViewSpec } from '../model/layout';
@@ -46,9 +55,11 @@ export interface AnnotateDeps {
   commit(): void;
   /** ツールバーの表示・非表示(表示領域の大きさが変わるので、呼ぶ側で再描画する) */
   onModeChange(active: boolean): void;
+  /** タッチ(指)で描くときの位置の補正(画面のピクセル)。なければ、補正なし */
+  touchOffset?(): { x: number; y: number };
 }
 
-type Tool = 'rect' | 'stroke' | 'memo' | 'erase';
+type Tool = 'rect' | 'stroke' | 'memo' | 'erase' | 'select';
 type DrawTool = 'rect' | 'stroke';
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -56,6 +67,8 @@ const TOOL_KEY = 'ann-tool:v1';
 const COLOR_STORE = 'ann-color:v1';
 const WIDTH_STORE = 'ann-width:v1';
 const HISTORY_LIMIT = 50;
+/** 長押しから蛍光ペンを選んだあと、この時間(ミリ秒)何も描かないと、通常の読書に戻る */
+export const QUICK_IDLE_MS = 8000;
 /** 点の間引きの許容(画面上のピクセル)。小さいほど元の線に忠実、大きいほどデータが小さい */
 const SIMPLIFY_PX = 1.5;
 /** これより近い点は取り込まない(画面上のピクセル) */
@@ -66,6 +79,7 @@ const HINTS: Record<Tool, string> = {
   stroke: 'なぞって線を引きます。',
   memo: 'メモを置く場所をタップします。',
   erase: '消したい蛍光ペンをタップします。',
+  select: '蛍光ペンをタップして選びます。●をドラッグして伸ばす・縮める、✥で動かします。',
 };
 const COMMON_HINT = ' 拡大は2本指(ホイール)、Shift+ドラッグで移動。元に戻す: Ctrl+Z';
 
@@ -105,7 +119,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const memoText = el<HTMLTextAreaElement>('memo-text');
   const memoDelete = el<HTMLButtonElement>('memo-delete');
   const menu = el('ctx-menu');
-  const oneShotHint = el('oneshot-hint');
+  const quickBar = el('oneshot-hint');
+  const quickText = el('oneshot-text');
+  const quickUndo = el<HTMLButtonElement>('quick-undo');
+  const quickColorButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-color]')];
+  const selBar = el('sel-bar');
+  const selUndo = el<HTMLButtonElement>('sel-undo');
+  const selColorButtons = [...selBar.querySelectorAll<HTMLButtonElement>('[data-sel-color]')];
+  const ctxTarget = el('ctx-target');
+  const ctxTargetColorButtons = [...ctxTarget.querySelectorAll<HTMLButtonElement>('[data-ctx-tcolor]')];
   const undoBtn = el<HTMLButtonElement>('ann-undo');
   const redoBtn = el<HTMLButtonElement>('ann-redo');
   const widthsEl = el('ann-widths');
@@ -115,12 +137,20 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const menuColorButtons = [...menu.querySelectorAll<HTMLButtonElement>('[data-ctx-color]')];
 
   let active = false;
-  /** 右クリックメニューから選んだ「1回だけ描く」ツール。描き終えたら閲覧に戻る */
+  /**
+   * 長押し・右クリックのメニューから選んだ蛍光ペンのツール。続けて何本でも引ける。
+   * 「完了」・戻る・Esc、または一定時間(QUICK_IDLE_MS)何も描かないと、通常の読書に戻る。
+   */
   let oneShot: DrawTool | null = null;
-  let tool: Tool = (['rect', 'stroke', 'memo', 'erase'] as const).find((t) => t === read(TOOL_KEY)) ?? 'rect';
+  let quickTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 長押しから入った「蛍光ペンを選んで直す」状態(注釈モードに入らない) */
+  let selecting = false;
+  /** 選んでいる蛍光ペン(注釈のID) */
+  let selectedId: string | null = null;
+  let tool: Tool = (['rect', 'stroke', 'memo', 'erase', 'select'] as const).find((t) => t === read(TOOL_KEY)) ?? 'rect';
   let color: AnnotationColor = COLOR_KEYS.find((c) => c === read(COLOR_STORE)) ?? 'yellow';
   let thickness: StrokeThickness = (['thin', 'medium', 'thick'] as const).find((t) => t === read(WIDTH_STORE)) ?? 'medium';
-  const curTool = (): Tool => oneShot ?? tool;
+  const curTool = (): Tool => oneShot ?? (selecting ? 'select' : tool);
 
   // ---- 元に戻す/やり直す ----
   // 注釈の書き換えは、削除の印(墓標)の付け外しで表すので、同期で他の端末の変更を巻き戻さない。
@@ -199,6 +229,51 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   }
 
   let preview: SVGElement | null = null;
+  /** 取っ手をドラッグしている間の、仮の形(離したときに保存する) */
+  let live: { id: string; geom: Geometry } | null = null;
+  const handleEls = new Map<string, HTMLButtonElement>();
+  let handleGeom: Geom | null = null;
+
+  const findSelected = (doc: BookSyncDocument): Exclude<Annotation, { kind: 'memo' }> | null => {
+    const a = selectedId ? visibleAnnotations(doc.annotations).find((x) => x.id === selectedId) : undefined;
+    return a && a.kind !== 'memo' ? a : null;
+  };
+
+  /** 蛍光ペン(四角・線)を描く。取っ手をドラッグしている間は、仮の形で描く */
+  function drawShapes(doc: BookSyncDocument, g: Geom): void {
+    svg.replaceChildren();
+    preview = null;
+    const { region, pdfPage } = g.spec;
+    const W = g.page.w;
+    const H = g.page.h;
+    svg.setAttribute('viewBox', `${region.x * W} ${region.y * H} ${region.w * W} ${region.h * H}`);
+    for (const a of visibleAnnotations(doc.annotations)) {
+      if (a.page.pdfPage !== pdfPage || a.kind === 'memo') continue;
+      const lv = live && live.id === a.id ? live.geom : null;
+      if (a.kind === 'highlight-rect') {
+        const r = lv && 'rect' in lv ? lv.rect : a.rect;
+        svg.append(shapeEl({ kind: 'rect', x: r.x * W, y: r.y * H, w: r.w * W, h: r.h * H, css: COLORS[a.color].css }));
+        if (a.id === selectedId) {
+          const o = document.createElementNS(NS, 'rect');
+          for (const [k, v] of [['x', r.x * W], ['y', r.y * H], ['width', r.w * W], ['height', r.h * H]] as const) o.setAttribute(k, String(v));
+          o.setAttribute('class', 'sel-outline');
+          svg.append(o);
+        }
+      } else {
+        const pts = lv && 'points' in lv ? lv.points : a.points;
+        const d = smoothPath(pts.map((p) => ({ x: p.x * W, y: p.y * H })));
+        svg.append(shapeEl({ kind: 'stroke', d, width: a.width * W, css: COLORS[a.color].css }));
+        if (a.id === selectedId) {
+          const o = document.createElementNS(NS, 'path');
+          o.setAttribute('d', d);
+          o.setAttribute('stroke-width', String(a.width * W + 6));
+          o.setAttribute('class', 'sel-outline');
+          o.setAttribute('stroke-linecap', 'round');
+          svg.append(o);
+        }
+      }
+    }
+  }
 
   /** 保存済みの注釈を描き直す(ページを変えた・ズームした・同期で増えた、などのとき) */
   function render(): void {
@@ -206,40 +281,217 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     const g = deps.getGeom();
     svg.replaceChildren();
     pins.replaceChildren();
+    handleEls.clear();
     preview = null;
     if (!doc || !g) return;
-    const { region, pdfPage } = g.spec;
-    const W = g.page.w;
-    const H = g.page.h;
-    svg.setAttribute('viewBox', `${region.x * W} ${region.y * H} ${region.w * W} ${region.h * H}`);
-
-    for (const a of visibleAnnotations(doc.annotations)) {
-      if (a.page.pdfPage !== pdfPage) continue;
-      if (a.kind === 'highlight-rect') {
-        svg.append(shapeEl({ kind: 'rect', x: a.rect.x * W, y: a.rect.y * H, w: a.rect.w * W, h: a.rect.h * H, css: COLORS[a.color].css }));
-      } else if (a.kind === 'highlight-stroke') {
-        svg.append(shapeEl({ kind: 'stroke', d: smoothPath(a.points.map((p) => ({ x: p.x * W, y: p.y * H }))), width: a.width * W, css: COLORS[a.color].css }));
-      } else {
-        // 表示範囲の中にあるメモだけ、ピンを出す
-        if (a.at.x < region.x || a.at.x > region.x + region.w || a.at.y < region.y || a.at.y > region.y + region.h) continue;
-        const pin = document.createElement('button');
-        pin.type = 'button';
-        pin.className = 'memo-pin';
-        pin.textContent = '✎';
-        pin.setAttribute('aria-label', `メモを開く: ${a.text.slice(0, 20)}`);
-        pin.style.left = `${((a.at.x - region.x) / region.w) * 100}%`;
-        pin.style.top = `${((a.at.y - region.y) / region.h) * 100}%`;
-        // ピンの操作が、ページ送りやメニューの操作として扱われないようにする
-        pin.addEventListener('pointerdown', (e) => e.stopPropagation());
-        pin.addEventListener('pointerup', (e) => e.stopPropagation());
-        pin.addEventListener('contextmenu', (e) => e.stopPropagation());
-        pin.addEventListener('click', (e) => {
-          e.stopPropagation();
-          openEditor({ id: a.id, text: a.text });
-        });
-        pins.append(pin);
-      }
+    // 選んでいる蛍光ペンが、このページに無い(ページを変えた・消えた)ときは、選択を外す
+    if (selectedId && !live) {
+      const sel = findSelected(doc);
+      if (!sel || sel.page.pdfPage !== g.spec.pdfPage) endSelection(false);
     }
+    drawShapes(doc, g);
+    const { region } = g.spec;
+    for (const a of visibleAnnotations(doc.annotations)) {
+      if (a.page.pdfPage !== g.spec.pdfPage || a.kind !== 'memo') continue;
+      // 表示範囲の中にあるメモだけ、ピンを出す
+      if (a.at.x < region.x || a.at.x > region.x + region.w || a.at.y < region.y || a.at.y > region.y + region.h) continue;
+      const pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'memo-pin';
+      pin.textContent = '✎';
+      pin.setAttribute('aria-label', `メモを開く: ${a.text.slice(0, 20)}`);
+      pin.style.left = `${((a.at.x - region.x) / region.w) * 100}%`;
+      pin.style.top = `${((a.at.y - region.y) / region.h) * 100}%`;
+      // ピンの操作が、ページ送りやメニューの操作として扱われないようにする
+      pin.addEventListener('pointerdown', (e) => e.stopPropagation());
+      pin.addEventListener('pointerup', (e) => e.stopPropagation());
+      pin.addEventListener('contextmenu', (e) => e.stopPropagation());
+      pin.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openEditor({ id: a.id, text: a.text });
+      });
+      pins.append(pin);
+    }
+    buildHandles(doc, g);
+    syncSelUi();
+  }
+
+  // ---- 選んだ蛍光ペンの取っ手(動かす・伸ばす・縮める) ----
+
+  function handlePoints(a: Exclude<Annotation, { kind: 'memo' }>, geom: Geometry): Array<{ h: string; x: number; y: number }> {
+    if (a.kind === 'highlight-rect' && 'rect' in geom) {
+      const r = geom.rect;
+      return [
+        { h: 'nw', x: r.x, y: r.y },
+        { h: 'ne', x: r.x + r.w, y: r.y },
+        { h: 'sw', x: r.x, y: r.y + r.h },
+        { h: 'se', x: r.x + r.w, y: r.y + r.h },
+        { h: 'move', x: r.x + r.w / 2, y: r.y + r.h / 2 },
+      ];
+    }
+    if (a.kind === 'highlight-stroke' && 'points' in geom && geom.points.length > 0) {
+      const p = geom.points;
+      // 動かす取っ手は、線の道のりの真ん中に置く(点が2つだけの線でも、端の取っ手と重ならない)
+      const mid = pointAtHalf(p, handleGeomPage());
+      return [
+        { h: 'start', x: p[0]!.x, y: p[0]!.y },
+        { h: 'end', x: p[p.length - 1]!.x, y: p[p.length - 1]!.y },
+        { h: 'move', x: mid.x, y: mid.y },
+      ];
+    }
+    return [];
+  }
+
+  const handleGeomPage = (): { w: number; h: number } => handleGeom?.page ?? deps.getGeom()?.page ?? { w: 1, h: 1 };
+
+  /** 折れ線の、道のりの半分の位置の点(縦横比を考えたピクセルで測る) */
+  function pointAtHalf(pts: readonly NormPoint[], page: { w: number; h: number }): NormPoint {
+    if (pts.length === 1) return pts[0]!;
+    const seg: number[] = [];
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot((pts[i]!.x - pts[i - 1]!.x) * page.w, (pts[i]!.y - pts[i - 1]!.y) * page.h);
+      seg.push(d);
+      total += d;
+    }
+    if (total === 0) return pts[0]!;
+    let rest = total / 2;
+    for (let i = 0; i < seg.length; i++) {
+      if (rest <= seg[i]!) {
+        const t = seg[i] === 0 ? 0 : rest / seg[i]!;
+        return { x: pts[i]!.x + (pts[i + 1]!.x - pts[i]!.x) * t, y: pts[i]!.y + (pts[i + 1]!.y - pts[i]!.y) * t };
+      }
+      rest -= seg[i]!;
+    }
+    return pts[pts.length - 1]!;
+  }
+
+  function placeHandles(a: Exclude<Annotation, { kind: 'memo' }>): void {
+    const g = handleGeom;
+    if (!g) return;
+    const geom = live && live.id === a.id ? live.geom : geometryOf(a);
+    if (!geom) return;
+    const { region } = g.spec;
+    for (const p of handlePoints(a, geom)) {
+      const b = handleEls.get(p.h);
+      if (!b) continue;
+      b.style.left = `${((p.x - region.x) / region.w) * 100}%`;
+      b.style.top = `${((p.y - region.y) / region.h) * 100}%`;
+    }
+  }
+
+  function buildHandles(doc: BookSyncDocument, g: Geom): void {
+    handleEls.clear();
+    handleGeom = g;
+    const a = findSelected(doc);
+    if (!a || a.page.pdfPage !== g.spec.pdfPage) return;
+    const geom = geometryOf(a);
+    if (!geom) return;
+    for (const p of handlePoints(a, geom)) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'sel-handle';
+      b.dataset.h = p.h;
+      if (p.h === 'move' && a.kind === 'highlight-stroke') b.classList.add('above'); // 線の上に、少し浮かせる(文字と端の取っ手を隠さない)
+      b.textContent = p.h === 'move' ? '✥' : '';
+      b.setAttribute('aria-label', p.h === 'move' ? '蛍光ペンを動かす' : '蛍光ペンの端を動かして伸ばす・縮める');
+      attachHandle(b, p.h);
+      handleEls.set(p.h, b);
+      pins.append(b);
+    }
+    placeHandles(a);
+  }
+
+  let handleDrag: {
+    name: string;
+    pointerId: number;
+    id: string;
+    before: Geometry;
+    /** つかんだ点の、元の位置(正規化)。動かす量だけを足して、新しい位置にする */
+    orig: NormPoint;
+    startClient: { x: number; y: number };
+    changed: boolean;
+  } | null = null;
+
+  /** 画面上の動き(クライアント座標)を、元画像基準の正規化座標の動きに直す */
+  function deltaNorm(from: { x: number; y: number }, to: { x: number; y: number }): NormPoint | null {
+    const stage = (pageEl.offsetParent ?? pageEl.parentElement) as HTMLElement | null;
+    if (!stage) return null;
+    const r = stage.getBoundingClientRect();
+    const a = toNorm(from.x - r.left, from.y - r.top);
+    const b = toNorm(to.x - r.left, to.y - r.top);
+    if (!a || !b) return null;
+    return { x: b.p.x - a.p.x, y: b.p.y - a.p.y };
+  }
+
+  function attachHandle(btn: HTMLButtonElement, name: string): void {
+    const stop = (e: Event) => e.stopPropagation(); // ページ送り・メニューの操作として扱わない
+    btn.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const doc = deps.getDoc();
+      const a = doc ? findSelected(doc) : null;
+      const geom = a ? geometryOf(a) : null;
+      if (!a || !geom) return;
+      const orig = handlePoints(a, geom).find((p) => p.h === name);
+      if (!orig) return;
+      btn.setPointerCapture(e.pointerId);
+      handleDrag = { name, pointerId: e.pointerId, id: a.id, before: geom, orig: { x: orig.x, y: orig.y }, startClient: { x: e.clientX, y: e.clientY }, changed: false };
+    });
+    btn.addEventListener('pointermove', (e) => {
+      const d = handleDrag;
+      const doc = deps.getDoc();
+      const g = deps.getGeom();
+      if (!d || d.pointerId !== e.pointerId || !doc || !g) return;
+      e.stopPropagation();
+      const delta = deltaNorm(d.startClient, { x: e.clientX, y: e.clientY });
+      if (!delta) return;
+      const a = visibleAnnotations(doc.annotations).find((x) => x.id === d.id);
+      if (!a || a.kind === 'memo') return;
+      let next: Geometry | null = null;
+      const target = { x: d.orig.x + delta.x, y: d.orig.y + delta.y };
+      if (d.name === 'move') {
+        next = movedGeometry({ ...a, ...d.before } as Annotation, delta.x, delta.y);
+      } else if (a.kind === 'highlight-rect' && 'rect' in d.before) {
+        next = { rect: resizedRect(d.before.rect, d.name as RectCorner, target) };
+      } else if (a.kind === 'highlight-stroke' && 'points' in d.before) {
+        next = { points: stretchedStroke(d.before.points, d.name as StrokeEnd, target, g.page) };
+      }
+      if (!next) return;
+      live = { id: d.id, geom: next };
+      d.changed = true;
+      drawShapes(doc, g);
+      placeHandles(a);
+    });
+    const finish = (e: PointerEvent, cancelled: boolean) => {
+      const d = handleDrag;
+      if (!d || d.pointerId !== e.pointerId) return;
+      e.stopPropagation();
+      handleDrag = null;
+      const l = live;
+      live = null;
+      const doc = deps.getDoc();
+      if (btn.hasPointerCapture(e.pointerId)) btn.releasePointerCapture(e.pointerId);
+      if (!doc) return;
+      if (cancelled || !l || !d.changed) {
+        render();
+        return;
+      }
+      const before = d.before;
+      const after = l.geom;
+      const id = d.id;
+      doc.annotations = setAnnotationGeometry(doc.annotations, id, after);
+      deps.commit();
+      render();
+      record({
+        undo: () => apply((list) => setAnnotationGeometry(list, id, before)),
+        redo: () => apply((list) => setAnnotationGeometry(list, id, after)),
+      });
+    };
+    btn.addEventListener('pointerup', (e) => finish(e, false));
+    btn.addEventListener('pointercancel', (e) => finish(e, true));
+    btn.addEventListener('contextmenu', (e) => e.preventDefault());
+    btn.addEventListener('click', stop);
   }
 
   /** ピンの大きさを、ズームしても変えない */
@@ -274,7 +526,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   function onDrawStart(x: number, y: number): void {
     const n = toNorm(x, y);
-    if (!n || (!active && !oneShot)) return;
+    if (!n || (!active && !oneShot && !selecting)) return;
     drag = { start: n.p, sx: x, sy: y, points: [n.p], last: { x, y }, moved: 0 };
   }
 
@@ -306,12 +558,110 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     }
   }
 
+  // ---- 続けて引く(長押し・右クリックのメニューから) ----
+  function armQuickIdle(): void {
+    clearTimeout(quickTimer);
+    quickTimer = setTimeout(() => {
+      if (!oneShot) return;
+      if (drag) return armQuickIdle(); // 描いている最中は、戻さない
+      finishOneShot();
+    }, QUICK_IDLE_MS);
+  }
+
   function finishOneShot(): void {
     if (!oneShot) return;
     oneShot = null;
-    oneShotHint.hidden = true;
+    clearTimeout(quickTimer);
+    quickBar.hidden = true;
     renderBar();
   }
+
+  function renderQuickColors(): void {
+    for (const b of quickColorButtons) b.setAttribute('aria-pressed', String(b.dataset.quickColor === color));
+  }
+
+  // ---- 蛍光ペンを選ぶ(動かす・伸ばす・縮める・消す・色を変える) ----
+  const SEL_TEXT = '●をドラッグして伸ばす・縮める。✥で動かす。「戻る」でも終わります';
+
+  function syncSelUi(): void {
+    const doc = deps.getDoc();
+    const a = doc ? findSelected(doc) : null;
+    selBar.hidden = !a;
+    // 注釈ツールバーが出ているときは、その上に重ねる
+    selBar.style.bottom = active && !bar.hidden ? `${bar.offsetHeight + 8}px` : '';
+    for (const b of selColorButtons) b.setAttribute('aria-pressed', String(!!a && a.color === b.dataset.selColor));
+    el('sel-text').textContent = SEL_TEXT;
+    selUndo.disabled = undoStack.length === 0;
+  }
+
+  function endSelection(rerender = true): void {
+    const had = selecting || selectedId !== null;
+    selecting = false;
+    selectedId = null;
+    live = null;
+    handleDrag = null;
+    selBar.hidden = true;
+    if (had && rerender) render();
+  }
+
+  function startSelection(id: string): void {
+    finishOneShot();
+    selecting = !active; // 注釈モードのときは、「選ぶ」ツールの動きになる
+    selectedId = id;
+    render();
+    syncSelUi();
+  }
+
+  /** タップした位置にある蛍光ペン(いちばん上のもの)を選ぶ。何もなければ、選択を外す */
+  function selectAt(p: NormPoint, g: Geom, doc: BookSyncDocument): void {
+    const tol = 12 * unitsPerPx(g);
+    const hits = visibleAnnotations(doc.annotations).filter((a) => a.page.pdfPage === g.spec.pdfPage && a.kind !== 'memo' && hitHighlight(a, p, tol, g.page));
+    const top = hits[hits.length - 1];
+    if (top) {
+      selectedId = top.id;
+      render();
+      syncSelUi();
+      return;
+    }
+    if (selecting) endSelection(); // 長押しから入った選択は、何もない所のタップで終わる
+    else {
+      selectedId = null;
+      selBar.hidden = true;
+      render();
+    }
+  }
+
+  function setSelectedColor(c: AnnotationColor): void {
+    const doc = deps.getDoc();
+    const a = doc ? findSelected(doc) : null;
+    if (!doc || !a || a.color === c) return;
+    const id = a.id;
+    const prev = a.color;
+    apply((l) => setAnnotationColor(l, id, c));
+    record({ undo: () => apply((l) => setAnnotationColor(l, id, prev)), redo: () => apply((l) => setAnnotationColor(l, id, c)) });
+    syncSelUi();
+  }
+
+  function deleteHighlight(id: string): void {
+    apply((l) => deleteAnnotation(l, id));
+    record({ undo: () => apply((l) => restoreAnnotation(l, id)), redo: () => apply((l) => deleteAnnotation(l, id)) });
+  }
+
+  for (const b of selColorButtons) {
+    b.style.setProperty('--swatch', COLORS[b.dataset.selColor as AnnotationColor].css);
+    b.addEventListener('click', () => setSelectedColor(b.dataset.selColor as AnnotationColor));
+  }
+  selUndo.addEventListener('click', () => {
+    undo();
+    syncSelUi();
+  });
+  el('sel-delete').addEventListener('click', () => {
+    if (!selectedId) return;
+    const id = selectedId;
+    endSelection(false);
+    deleteHighlight(id);
+  });
+  el('sel-done').addEventListener('click', () => endSelection());
 
   function onDrawEnd(x: number, y: number, cancelled: boolean): void {
     const d = drag;
@@ -344,6 +694,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       recordCreate(next[next.length - 1]!.id);
     } else if (t === 'memo' && tap) {
       openEditor({ at: n.p, page: pageRef(n.p, g, doc) });
+    } else if (t === 'select' && tap) {
+      selectAt(n.p, g, doc);
     } else if (t === 'erase' && tap) {
       // 画面上の約10pxを、元のPDFの単位に直した余裕
       const tol = 10 * unitsPerPx(g);
@@ -357,7 +709,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
         record({ undo: () => apply((l) => restoreAnnotation(l, id)), redo: () => apply((l) => deleteAnnotation(l, id)) });
       }
     }
-    finishOneShot();
+    if (oneShot) armQuickIdle(); // 続けて引ける。引き終えるたびに、自動で戻るまでの時間を数え直す
   }
 
   // ---- メモの入力 ----
@@ -446,9 +798,24 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     e.stopPropagation();
   };
 
+  /** メニューを開いた位置にある蛍光ペン(あれば)。その蛍光ペンを直す項目を出す */
+  let menuTarget: string | null = null;
+
   function openContextMenu(x: number, y: number): void {
     menuPoint = { x, y };
     menuArmed = false;
+    menuTarget = null;
+    const doc = deps.getDoc();
+    const n = toNorm(x, y);
+    if (doc && n) {
+      const tol = 12 * unitsPerPx(n.g);
+      const hits = visibleAnnotations(doc.annotations).filter((a) => a.page.pdfPage === n.g.spec.pdfPage && a.kind !== 'memo' && hitHighlight(a, n.p, tol, n.g.page));
+      const top = hits[hits.length - 1];
+      menuTarget = top && top.kind !== 'memo' ? top.id : null;
+      const t = top && top.kind !== 'memo' ? top : null;
+      for (const b of ctxTargetColorButtons) b.setAttribute('aria-pressed', String(!!t && t.color === b.dataset.ctxTcolor));
+    }
+    ctxTarget.hidden = menuTarget === null;
     menu.hidden = false;
     const parent = menu.offsetParent as HTMLElement | null;
     const maxX = (parent?.clientWidth ?? window.innerWidth) - menu.offsetWidth - 8;
@@ -471,9 +838,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   function beginOneShot(t: DrawTool): void {
     closeMenu();
+    endSelection();
     oneShot = t;
-    oneShotHint.textContent = (t === 'rect' ? 'ドラッグで四角く囲みます' : 'なぞって線を引きます') + '(Escまたは「戻る」で中止)';
-    oneShotHint.hidden = false;
+    quickText.textContent =
+      (t === 'rect' ? 'ドラッグで四角く囲みます。' : 'なぞって線を引きます。') +
+      `続けて引けます。${QUICK_IDLE_MS / 1000}秒引かないと、自動で戻ります。「完了」か「戻る」でも終わります`;
+    quickBar.hidden = false;
+    renderQuickColors();
+    renderBar();
+    armQuickIdle();
   }
 
   function cancelOneShot(): void {
@@ -481,6 +854,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     preview?.remove();
     preview = null;
     finishOneShot();
+    endSelection();
   }
 
   for (const b of menu.querySelectorAll<HTMLButtonElement>('[data-ctx]')) {
@@ -492,7 +866,30 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
         placeMemoAt(menuPoint.x, menuPoint.y);
       } else if (act === 'rect' || act === 'stroke') {
         beginOneShot(act);
+      } else if (act === 'select' && menuTarget) {
+        const id = menuTarget;
+        closeMenu();
+        startSelection(id);
+      } else if (act === 'delete' && menuTarget) {
+        const id = menuTarget;
+        closeMenu();
+        deleteHighlight(id);
       }
+    });
+  }
+  for (const b of ctxTargetColorButtons) {
+    b.style.setProperty('--swatch', COLORS[b.dataset.ctxTcolor as AnnotationColor].css);
+    b.addEventListener('click', (e) => {
+      if (strayClick(e) || !menuTarget) return;
+      const id = menuTarget;
+      const c = b.dataset.ctxTcolor as AnnotationColor;
+      const a = deps.getDoc()?.annotations.find((x) => x.id === id);
+      if (!a || a.kind === 'memo') return;
+      const prev = a.color;
+      closeMenu();
+      if (prev === c) return;
+      apply((l) => setAnnotationColor(l, id, c));
+      record({ undo: () => apply((l) => setAnnotationColor(l, id, prev)), redo: () => apply((l) => setAnnotationColor(l, id, c)) });
     });
   }
   for (const b of menuColorButtons) {
@@ -502,6 +899,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       color = b.dataset.ctxColor as AnnotationColor;
       write(COLOR_STORE, color);
       renderMenuColors();
+      renderQuickColors();
       renderBar();
     });
   }
@@ -514,12 +912,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     widthsEl.hidden = tool !== 'stroke';
     undoBtn.disabled = undoStack.length === 0;
     redoBtn.disabled = redoStack.length === 0;
+    quickUndo.disabled = undoStack.length === 0;
+    selUndo.disabled = undoStack.length === 0;
     hint.textContent = HINTS[tool] + COMMON_HINT;
   }
   for (const b of toolButtons) {
     b.addEventListener('click', () => {
       tool = b.dataset.tool as Tool;
       write(TOOL_KEY, tool);
+      if (tool !== 'select') endSelection(); // 「選ぶ」以外のツールに替えたら、選択を外す
       renderBar();
     });
   }
@@ -540,6 +941,22 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   }
   undoBtn.addEventListener('click', undo);
   redoBtn.addEventListener('click', redo);
+  for (const b of quickColorButtons) {
+    b.style.setProperty('--swatch', COLORS[b.dataset.quickColor as AnnotationColor].css);
+    b.addEventListener('click', () => {
+      color = b.dataset.quickColor as AnnotationColor;
+      write(COLOR_STORE, color);
+      renderQuickColors();
+      renderMenuColors();
+      renderBar();
+      if (oneShot) armQuickIdle();
+    });
+  }
+  quickUndo.addEventListener('click', () => {
+    undo();
+    if (oneShot) armQuickIdle();
+  });
+  el('quick-done').addEventListener('click', () => finishOneShot());
   el('ann-prev').addEventListener('click', deps.prev);
   el('ann-next').addEventListener('click', deps.next);
   el('ann-done').addEventListener('click', () => exit());
@@ -559,6 +976,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     drag = null;
     preview?.remove();
     preview = null;
+    endSelection();
     closeEditor();
     closeMenu();
     bar.hidden = true;
@@ -572,6 +990,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     closeEditor();
     closeMenu();
     finishOneShot();
+    endSelection(false);
     undoStack.length = 0;
     redoStack.length = 0;
     bar.hidden = true;
@@ -595,9 +1014,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     isActive: () => active,
     isEditorOpen: () => !editor.hidden,
     isMenuOpen: () => !menu.hidden,
-    isOneShot: () => oneShot !== null,
+    isOneShot: () => oneShot !== null || selecting,
     closeEditor,
     /** ジェスチャーに渡す、描画の操作 */
-    draw: { drawActive: () => active || oneShot !== null, onDrawStart, onDrawMove, onDrawEnd },
+    draw: { drawActive: () => active || oneShot !== null || selecting, drawOffset: () => deps.touchOffset?.() ?? { x: 0, y: 0 }, onDrawStart, onDrawMove, onDrawEnd },
   };
 }

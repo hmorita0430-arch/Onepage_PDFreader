@@ -51,6 +51,8 @@ import { createNav } from './ui/nav';
 import { clearDestination, describeDestination, loadDestination, saveDestination } from './export/destination';
 import { highlightTexts, prepareExport, uploadExport, type ExportPackage } from './export/exporter';
 import { createPreview } from './ui/preview';
+import { createCalibration } from './ui/calibrate';
+import { describeOffset, loadOffset, saveOffset, type Offset } from './model/touchoffset';
 import { loadIncludeImages, saveIncludeImages } from './export/options';
 import { attachGestures } from './reader/gestures';
 import { PageViewer } from './reader/viewer';
@@ -330,6 +332,10 @@ function popReaderHistory(): void {
 
 /** 前面にある画面を1つ閉じる。閉じたものがあれば true */
 function closeTopOverlay(): boolean {
+  if (calib.isOpen()) {
+    calib.close();
+    return true;
+  }
   if (preview.isOpen()) {
     preview.close(); // 保存中は閉じない(閉じなくても、「戻る」は、この画面の操作として扱う)
     return true;
@@ -809,8 +815,27 @@ async function recognizeHighlight(a: Annotation, orientation: Orientation, onSta
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
 
+// 指で描くときの位置の補正(この端末内の設定。「描画位置の確認」で測る)
+let drawOffset: Offset = loadOffset();
+const drawOffsetText = $('draw-offset-now');
+const renderDrawOffset = () => (drawOffsetText.textContent = describeOffset(drawOffset));
+renderDrawOffset();
+const calib = createCalibration({
+  current: () => drawOffset,
+  apply: (o) => {
+    drawOffset = o;
+    saveOffset(o);
+    renderDrawOffset();
+  },
+});
+$('open-calib').addEventListener('click', () => {
+  settingsEl.hidden = true;
+  calib.open();
+});
+
 const annot = createAnnotator(
   {
+    touchOffset: () => drawOffset,
     getDoc: () => doc,
     getGeom: () => (doc && shownSpec ? { spec: shownSpec, fit, page: pageSize, box: hostBox(), view } : null),
     prev: () => goPrev(),
@@ -887,6 +912,10 @@ attachGestures(stageEl, {
 
 document.addEventListener('keydown', (e) => {
   if (!doc || readerEl.hidden) return;
+  if (calib.isOpen()) {
+    if (e.key === 'Escape') closeTopOverlay();
+    return;
+  }
   if (preview.isOpen()) {
     if (e.key === 'Escape') closeTopOverlay();
     return;

@@ -161,6 +161,12 @@
           <p id="reading-error" class="error" hidden role="alert"></p>
         </fieldset>
         <fieldset>
+          <legend>蛍光ペンの描画位置(この端末)</legend>
+          <p class="muted">指で描いた線が、触れた位置からずれるときに、ずれを測って補正します。</p>
+          <p class="muted">いまの補正: <span id="draw-offset-now">補正なし</span></p>
+          <button id="open-calib" class="secondary" type="button">位置を確認する…</button>
+        </fieldset>
+        <fieldset>
           <legend>注釈の書き出し</legend>
           <p class="muted">蛍光ペン・メモを、注釈つきの画像とMarkdownにして、ドライブへ保存します。</p>
           <p class="muted">保存先: <span id="export-dest"></span></p>
@@ -185,6 +191,20 @@
         <p id="version-reader" class="muted"></p>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
+      <section id="calib" class="calib" hidden role="dialog" aria-label="描画位置の確認">
+        <header class="nav-head">
+          <h2 class="preview-title">描画位置の確認</h2>
+          <button id="calib-close" class="icon" type="button" aria-label="閉じる">✕</button>
+        </header>
+        <p id="calib-msg" class="calib-msg" role="status"></p>
+        <div id="calib-pad" class="calib-pad" aria-label="目印に触れる場所"></div>
+        <div class="calib-actions">
+          <button id="calib-apply" class="primary" type="button" disabled>この補正を使う</button>
+          <button id="calib-retry" class="secondary" type="button">やり直す</button>
+          <button id="calib-reset" class="secondary" type="button">補正をなしにする</button>
+        </div>
+      </section>
+
       <section id="export-preview" class="export-preview" hidden role="dialog" aria-label="書き出しのプレビュー">
         <header class="nav-head">
           <h2 class="preview-title">書き出しのプレビュー</h2>
@@ -287,6 +307,7 @@
           <button type="button" data-tool="stroke" aria-pressed="false">なぞる</button>
           <button type="button" data-tool="memo" aria-pressed="false">メモ</button>
           <button type="button" data-tool="erase" aria-pressed="false">消す</button>
+          <button type="button" data-tool="select" aria-pressed="false">選ぶ</button>
           <button id="ann-next" type="button" aria-label="次のページ">▶</button>
         </div>
         <div class="ann-row">
@@ -310,9 +331,44 @@
         <p id="ann-hint" class="muted"></p>
       </section>
 
-      <div id="oneshot-hint" class="oneshot-hint" hidden role="status"></div>
+      <!-- 長押しから蛍光ペンを選んだあと、続けて引くための小さなバー(画面の下) -->
+      <div id="oneshot-hint" class="quick-bar" hidden role="group" aria-label="蛍光ペンを続けて引く">
+        <span id="oneshot-text" class="quick-text" role="status"></span>
+        <span class="quick-colors" role="group" aria-label="色">
+          <button type="button" data-quick-color="yellow" aria-label="黄" aria-pressed="true"></button>
+          <button type="button" data-quick-color="green" aria-label="緑" aria-pressed="false"></button>
+          <button type="button" data-quick-color="pink" aria-label="ピンク" aria-pressed="false"></button>
+          <button type="button" data-quick-color="blue" aria-label="青" aria-pressed="false"></button>
+        </span>
+        <button id="quick-undo" type="button" aria-label="元に戻す" disabled>↶ 戻す</button>
+        <button id="quick-done" class="primary" type="button">完了</button>
+      </div>
+
+      <!-- 選んだ蛍光ペン(動かす・伸ばす・縮める・消す・色を変える) -->
+      <div id="sel-bar" class="quick-bar" hidden role="group" aria-label="選んだ蛍光ペン">
+        <span id="sel-text" class="quick-text" role="status">●をドラッグして伸ばす・縮める。✥で動かす</span>
+        <span class="quick-colors" role="group" aria-label="この蛍光ペンの色">
+          <button type="button" data-sel-color="yellow" aria-label="黄" aria-pressed="false"></button>
+          <button type="button" data-sel-color="green" aria-label="緑" aria-pressed="false"></button>
+          <button type="button" data-sel-color="pink" aria-label="ピンク" aria-pressed="false"></button>
+          <button type="button" data-sel-color="blue" aria-label="青" aria-pressed="false"></button>
+        </span>
+        <button id="sel-undo" type="button" aria-label="元に戻す" disabled>↶ 戻す</button>
+        <button id="sel-delete" class="danger" type="button">消す</button>
+        <button id="sel-done" class="primary" type="button">完了</button>
+      </div>
 
       <div id="ctx-menu" class="ctx-menu" hidden role="menu" aria-label="注釈">
+        <div id="ctx-target" class="ctx-target" role="group" aria-label="この蛍光ペン" hidden>
+          <button type="button" role="menuitem" data-ctx="select">✥ この蛍光ペンを動かす・伸ばす</button>
+          <button type="button" role="menuitem" data-ctx="delete">✕ この蛍光ペンを消す</button>
+          <span class="ctx-colors" role="group" aria-label="この蛍光ペンの色">
+            <button type="button" data-ctx-tcolor="yellow" aria-label="黄" aria-pressed="false"></button>
+            <button type="button" data-ctx-tcolor="green" aria-label="緑" aria-pressed="false"></button>
+            <button type="button" data-ctx-tcolor="pink" aria-label="ピンク" aria-pressed="false"></button>
+            <button type="button" data-ctx-tcolor="blue" aria-label="青" aria-pressed="false"></button>
+          </span>
+        </div>
         <button type="button" role="menuitem" data-ctx="memo">✎ ここにメモを置く</button>
         <button type="button" role="menuitem" data-ctx="rect">▭ 蛍光ペン(四角で囲む)</button>
         <button type="button" role="menuitem" data-ctx="stroke">〰 蛍光ペン(なぞる)</button>

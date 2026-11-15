@@ -283,10 +283,7 @@ button.icon {
 .ann-widths button { flex: 1; min-height: 44px; border-radius: 8px; border: 1px solid var(--muted); background: transparent; font: inherit; }
 .ann-widths button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
 
-.oneshot-hint {
-  position: absolute; top: max(8px, env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 6;
-  padding: 6px 14px; border-radius: 18px; background: var(--accent); color: var(--on-accent); font-size: 0.85rem; font-weight: 600; pointer-events: none;
-}
+
 
 .ctx-menu {
   position: absolute; z-index: 9; min-width: 13rem; padding: 4px;
@@ -395,3 +392,50 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 .preview-actions button.primary { flex: 1.7 1 0; }
 .preview-images-opt { display: flex; align-items: center; gap: 10px; min-height: 44px; margin: 0 0 4px; font-size: 0.95rem; }
 .preview-images-opt input { width: 22px; height: 22px; flex: none; }
+
+/* 蛍光ペンを続けて引く・選んだ蛍光ペンの操作バー(画面の下。上部の文字を隠さない) */
+.quick-bar {
+  position: absolute; left: 8px; right: 8px; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 6;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px; justify-content: center;
+  padding: 6px 8px; border-radius: 16px; background: var(--surface); border: 1px solid var(--accent);
+  font-size: 0.85rem; touch-action: manipulation;
+}
+.quick-text { flex: 1 1 100%; text-align: center; color: var(--text); line-height: 1.4; }
+.quick-colors { display: inline-flex; gap: 6px; }
+.quick-colors button { width: 36px; height: 36px; min-height: 0; border-radius: 50%; border: 2px solid transparent; background: var(--swatch, #999); padding: 0; }
+.quick-colors button[aria-pressed="true"] { border-color: var(--text); }
+.quick-bar > button { width: auto; margin: 0; min-height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--muted); background: transparent; color: var(--text); font: inherit; }
+.quick-bar > button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+.quick-bar > button.danger { color: var(--danger); border-color: var(--danger); }
+.quick-bar > button:disabled { opacity: 0.4; }
+
+/* 選んだ蛍光ペンの取っ手(つまみ)。ズームしても大きさを変えない */
+.sel-handle {
+  position: absolute; width: 26px; height: 26px; min-height: 0; padding: 0; z-index: 2;
+  transform: translate(-50%, -50%) scale(calc(1 / var(--zoom, 1)));
+  border-radius: 50%; border: 3px solid #fff; background: var(--accent);
+  pointer-events: auto; touch-action: none; cursor: grab; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+.sel-handle::before { content: ''; position: absolute; inset: -12px; }
+.sel-handle[data-h="move"] { width: 32px; height: 32px; background: #e8590c; color: #fff; font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center; }
+.ann-layer svg .sel-outline { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; vector-effect: non-scaling-stroke; opacity: 1; mix-blend-mode: normal; }
+.ctx-target { display: flex; flex-direction: column; border-bottom: 1px solid var(--muted); margin-bottom: 4px; padding-bottom: 4px; }
+.ctx-target[hidden] { display: none; }
+.ann-row > button[data-tool] { padding: 0 6px; }
+.ctx-target > button { display: block; width: 100%; min-height: 44px; text-align: left; padding: 0 12px; border: none; border-radius: 6px; background: none; font: inherit; color: var(--text); }
+.ctx-target > button:hover, .ctx-target > button:focus-visible { background: var(--hover); }
+
+/* 描画位置の確認 */
+.calib { position: absolute; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: column; touch-action: none; }
+.calib-msg { white-space: pre-line; margin: 8px 16px; font-size: 0.9rem; line-height: 1.5; min-height: 4.5em; }
+.calib-pad { position: relative; flex: 1; margin: 0 12px; border: 1px dashed var(--muted); border-radius: 12px; touch-action: none; user-select: none; }
+.calib-marker { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); pointer-events: none; }
+.calib-marker::before, .calib-marker::after { content: ''; position: absolute; background: var(--accent); }
+.calib-marker::before { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+.calib-marker::after { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+.calib-dot { position: absolute; width: 12px; height: 12px; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.calib-dot.aim { border: 2px solid var(--accent); background: transparent; }
+.calib-dot.hit { background: #e8590c; }
+.calib-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+.calib-actions button { flex: 1 1 8rem; width: auto; margin: 0; }
+.sel-handle.above { transform: translate(-50%, -50%) translateY(calc(-34px / var(--zoom, 1))) scale(calc(1 / var(--zoom, 1))); }

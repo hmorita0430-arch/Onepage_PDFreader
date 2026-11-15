@@ -116,6 +116,89 @@ export function setStrokeWidth(list: readonly Annotation[], id: string, width: n
   return list.map((a) => (a.id === id && a.kind === 'highlight-stroke' ? { ...a, width, updatedAt: bump(a.updatedAt, now) } : a));
 }
 
+// ---- 蛍光ペンの修正(動かす・伸ばす・縮める) ----
+
+export type RectCorner = 'nw' | 'ne' | 'sw' | 'se';
+export type StrokeEnd = 'start' | 'end';
+
+const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
+const MIN_RECT = 0.002;
+
+/** 蛍光ペンを、正規化座標で (dx, dy) だけ動かす。ページの外へはみ出さない。メモは対象外 */
+export function movedGeometry(a: Annotation, dx: number, dy: number): Geometry | null {
+  if (a.kind === 'highlight-rect') {
+    const x = Math.max(0, Math.min(1 - a.rect.w, a.rect.x + dx));
+    const y = Math.max(0, Math.min(1 - a.rect.h, a.rect.y + dy));
+    return { rect: { ...a.rect, x, y } };
+  }
+  if (a.kind === 'highlight-stroke') {
+    const xs = a.points.map((p) => p.x);
+    const ys = a.points.map((p) => p.y);
+    const sx = Math.max(-Math.min(...xs), Math.min(1 - Math.max(...xs), dx));
+    const sy = Math.max(-Math.min(...ys), Math.min(1 - Math.max(...ys), dy));
+    return { points: a.points.map((p) => ({ x: p.x + sx, y: p.y + sy })) };
+  }
+  return null;
+}
+
+/** 四角の、角をつかんで動かした結果。反対側の角は動かさない。裏返ってもよい */
+export function resizedRect(r: NormRect, corner: RectCorner, p: NormPoint): NormRect {
+  const opp: NormPoint = {
+    x: corner === 'nw' || corner === 'sw' ? r.x + r.w : r.x,
+    y: corner === 'nw' || corner === 'ne' ? r.y + r.h : r.y,
+  };
+  const q = { x: clamp01(p.x), y: clamp01(p.y) };
+  const out = rectFrom(opp, q);
+  return { x: out.x, y: out.y, w: Math.max(MIN_RECT, out.w), h: Math.max(MIN_RECT, out.h) };
+}
+
+/**
+ * なぞった線の、端をつかんで伸ばす・縮める。反対側の端は動かさず、つかんだ端が指の位置に来るように、
+ * 線全体を拡大・縮小・回転する(まっすぐに近い線が、自然に伸び縮みする)。計算は画面と同じ縦横比のピクセルで行う。
+ */
+export function stretchedStroke(points: readonly NormPoint[], end: StrokeEnd, p: NormPoint, page: PageSize): NormPoint[] {
+  if (points.length < 2) return [...points];
+  const fixed = end === 'end' ? points[0]! : points[points.length - 1]!;
+  const grabbed = end === 'end' ? points[points.length - 1]! : points[0]!;
+  const fx = fixed.x * page.w;
+  const fy = fixed.y * page.h;
+  const v0x = grabbed.x * page.w - fx;
+  const v0y = grabbed.y * page.h - fy;
+  const v1x = clamp01(p.x) * page.w - fx;
+  const v1y = clamp01(p.y) * page.h - fy;
+  const l0 = Math.hypot(v0x, v0y);
+  const l1 = Math.hypot(v1x, v1y);
+  if (l0 < 1e-6) return points.map((q) => ({ ...q }));
+  const s = Math.max(0.02, l1 / l0);
+  const theta = l1 < 1e-6 ? 0 : Math.atan2(v1y, v1x) - Math.atan2(v0y, v0x);
+  const cos = Math.cos(theta) * s;
+  const sin = Math.sin(theta) * s;
+  return points.map((q) => {
+    const dx = q.x * page.w - fx;
+    const dy = q.y * page.h - fy;
+    return { x: clamp01((fx + dx * cos - dy * sin) / page.w), y: clamp01((fy + dx * sin + dy * cos) / page.h) };
+  });
+}
+
+export type Geometry = { rect: NormRect } | { points: NormPoint[] };
+
+/** 蛍光ペンの形(位置・大きさ)を置き換える。更新日時を進めるので、同期で古い状態に負けない。文字(ocrText)はそのまま残す */
+export function setAnnotationGeometry(list: readonly Annotation[], id: string, g: Geometry, now = Date.now()): Annotation[] {
+  return list.map((a) => {
+    if (a.id !== id) return a;
+    if (a.kind === 'highlight-rect' && 'rect' in g) return { ...a, rect: { ...g.rect }, updatedAt: bump(a.updatedAt, now) };
+    if (a.kind === 'highlight-stroke' && 'points' in g) return { ...a, points: g.points.map((q) => ({ ...q })), updatedAt: bump(a.updatedAt, now) };
+    return a;
+  });
+}
+
+/** 現在の形(元に戻す用の控え) */
+export function geometryOf(a: Annotation): Geometry | null {
+  if (a.kind === 'highlight-rect') return { rect: { ...a.rect } };
+  if (a.kind === 'highlight-stroke') return { points: a.points.map((q) => ({ ...q })) };
+  return null;
+}
+
 // ---- 座標 ----
 
 /** 画面上の点(表示領域の左上が原点)を、元画像基準の正規化座標に直す。表示範囲(region)の外へはみ出さない。 */
