@@ -14,12 +14,24 @@
         try { var v = localStorage.getItem('theme:v1'); if (v === 'light' || v === 'auto') m = v; } catch (e) {}
         var light = m === 'light' || (m === 'auto' && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches);
         document.documentElement.setAttribute('data-theme', light ? 'light' : 'dark');
+        // 目に優しい表示(暖色・紙の色)も、描画の前に当てる。計算は src/model/eyecomfort.ts と同じ(上限 0.5 / 0.9)
+        try {
+          var e = JSON.parse(localStorage.getItem('eye-comfort:v1') || 'null');
+          if (e && e.on !== false) {
+            var pc = function (v) { return typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 0; };
+            document.documentElement.style.setProperty('--eye-warm', String(Math.round((pc(e.warm) / 100) * 0.5 * 1000) / 1000));
+            document.documentElement.style.setProperty('--eye-paper', String(Math.round((pc(e.paper) / 100) * 0.9 * 1000) / 1000));
+          }
+        } catch (err) {}
         var meta = document.querySelector('meta[name="theme-color"]');
         if (meta) meta.setAttribute('content', light ? '#f5f4f0' : '#1b1b1f');
       })();
     </script>
   </head>
   <body>
+    <!-- 暖色フィルタ(画面全体に重ねる。タッチは通す) -->
+    <div id="warm-filter" class="warm-filter" aria-hidden="true"></div>
+
     <div id="update-banner" class="update-banner" hidden role="status">
       新しい版があります
       <button id="update-reload" type="button">更新</button>
@@ -57,6 +69,18 @@
         <ul id="library-list" class="library-list"></ul>
         <p id="library-empty" class="muted">まだありません。ドライブから開いた本は、自動で端末に保存されます。</p>
         <p id="storage-info" class="muted"></p>
+      </section>
+
+      <section class="library eye-section" aria-labelledby="eye-title-start">
+        <h2 id="eye-title-start">目に優しい表示</h2>
+        <p class="muted">暖色フィルタと紙の色で、画面を目に優しくします(この端末のみ)。端末の「夜間モード」「目の保護」を使っているときは、弱めにしてください(重ねると、暖色が強くなります)。</p>
+          <label class="eye-row">暖色フィルタ(青い光を弱める) <output id="eye-warm-out-start">0%</output>
+            <input type="range" min="0" max="100" step="5" value="0" data-eye="warm" aria-label="暖色フィルタの強さ" />
+          </label>
+          <label class="eye-row">紙の色(ページの白を、クリーム色に) <output id="eye-paper-out-start">0%</output>
+            <input type="range" min="0" max="100" step="5" value="0" data-eye="paper" aria-label="紙の色の強さ" />
+          </label>
+        <p id="eye-state-start" class="muted"></p>
       </section>
 
       <section class="library">
@@ -113,7 +137,10 @@
       </div>
 
       <footer id="bottombar" class="bar bottom" hidden>
-        <span id="page-label"></span>
+        <div class="bottom-row">
+          <span id="page-label"></span>
+          <button id="eye-toggle" class="eye-toggle" type="button" aria-pressed="false" aria-label="目に優しい表示のオン・オフ">☀ 目に優しい: オフ</button>
+        </div>
         <input id="page-slider" type="range" min="0" max="0" step="1" value="0" aria-label="ページ移動(スライダー)" />
       </footer>
 
@@ -166,6 +193,17 @@
           </div>
           <p id="reading-summary" class="muted"></p>
           <p id="reading-error" class="error" hidden role="alert"></p>
+        </fieldset>
+        <fieldset>
+          <legend>目に優しい表示(この端末)</legend>
+          <p class="muted">読書中は、画面下のメニューの「☀ 目に優しい」から、すぐオン・オフできます。</p>
+          <label class="eye-row">暖色フィルタ(青い光を弱める) <output id="eye-warm-out-reader">0%</output>
+            <input type="range" min="0" max="100" step="5" value="0" data-eye="warm" aria-label="暖色フィルタの強さ" />
+          </label>
+          <label class="eye-row">紙の色(ページの白を、クリーム色に) <output id="eye-paper-out-reader">0%</output>
+            <input type="range" min="0" max="100" step="5" value="0" data-eye="paper" aria-label="紙の色の強さ" />
+          </label>
+          <p id="eye-state-reader" class="muted"></p>
         </fieldset>
         <fieldset>
           <legend>画面を点けておく時間(この端末)</legend>

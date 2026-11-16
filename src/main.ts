@@ -52,6 +52,7 @@ import { clearDestination, describeDestination, loadDestination, saveDestination
 import { highlightTexts, prepareExport, uploadExport, type ExportPackage } from './export/exporter';
 import { createPreview } from './ui/preview';
 import { createCalibration } from './ui/calibrate';
+import { isEyeActive, loadEyeComfort, paperOpacity, saveEyeComfort, toggleEye, warmOpacity, withStrength, type EyeComfort } from './model/eyecomfort';
 import { AWAKE_OPTIONS, loadAwakeMode, parseAwakeMode, saveAwakeMode, type AwakeMode } from './model/awake';
 import { createAwake, type AwakeStatus } from './reader/wakelock';
 import { describeOffset, loadOffset, saveOffset, type Offset } from './model/touchoffset';
@@ -820,6 +821,45 @@ async function recognizeHighlight(a: Annotation, orientation: Orientation, onSta
 }
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
+
+// 目に優しい表示(暖色フィルタ・紙の色)。この端末内の設定
+let eye: EyeComfort = loadEyeComfort();
+const eyeInputs = [...document.querySelectorAll<HTMLInputElement>('input[data-eye]')];
+const eyeToggle = $<HTMLButtonElement>('eye-toggle');
+function applyEye(): void {
+  const root = document.documentElement.style;
+  root.setProperty('--eye-warm', String(warmOpacity(eye)));
+  root.setProperty('--eye-paper', String(paperOpacity(eye)));
+  for (const i of eyeInputs) {
+    const key = i.dataset.eye as 'warm' | 'paper';
+    i.value = String(eye[key]);
+    const out = i.closest('label')?.querySelector('output');
+    if (out) out.textContent = `${eye[key]}%`;
+  }
+  const active = isEyeActive(eye);
+  eyeToggle.setAttribute('aria-pressed', String(active));
+  eyeToggle.textContent = `☀ 目に優しい: ${active ? 'オン' : 'オフ'}`;
+  const text = active
+    ? `いま: オン(暖色 ${eye.warm}%・紙の色 ${eye.paper}%)`
+    : eye.warm > 0 || eye.paper > 0
+      ? 'いま: オフ(強さは、記憶しています。読書中の「☀ 目に優しい」で、すぐ入れられます)'
+      : 'いま: オフ';
+  for (const id of ['eye-state-start', 'eye-state-reader']) $(id).textContent = text;
+}
+for (const i of eyeInputs) {
+  const key = i.dataset.eye as 'warm' | 'paper';
+  i.addEventListener('input', () => {
+    eye = withStrength(eye, key, Number(i.value)); // 動かしたら、すぐ見える(オンになる)
+    applyEye();
+  });
+  i.addEventListener('change', () => saveEyeComfort(eye));
+}
+eyeToggle.addEventListener('click', () => {
+  eye = toggleEye(eye);
+  saveEyeComfort(eye);
+  applyEye();
+});
+applyEye();
 
 // 読書中に、画面を点けたままにする(最後の操作から、設定の時間まで)
 let awakeMode: AwakeMode = loadAwakeMode();
