@@ -7,6 +7,7 @@ import {
   addStroke,
   centerOf,
   deleteAnnotation,
+  geometryCenter,
   geometryOf,
   hitHighlight,
   movedGeometry,
@@ -69,6 +70,8 @@ const TOOL_KEY = 'ann-tool:v1';
 const COLOR_STORE = 'ann-color:v1';
 const WIDTH_STORE = 'ann-width:v1';
 const HISTORY_LIMIT = 50;
+const BAR_POS_KEY = 'quick-bar-pos:v1';
+type BarPos = 'auto' | 'top' | 'bottom';
 /** 長押しから蛍光ペンを選んだあと、この時間(ミリ秒)何も描かないと、通常の読書に戻る */
 export const QUICK_IDLE_MS = 8000;
 /** 点の間引きの許容(画面上のピクセル)。小さいほど元の線に忠実、大きいほどデータが小さい */
@@ -127,8 +130,14 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const quickColorButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-color]')];
   const quickToolButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-tool]')];
   const quickDelete = el<HTMLButtonElement>('quick-delete');
+  const quickEdit = el<HTMLButtonElement>('quick-edit');
+  const quickPos = el<HTMLButtonElement>('quick-pos');
+  const quickColorsEl = quickBar.querySelector<HTMLElement>('.quick-colors')!;
   const selBar = el('sel-bar');
   const selUndo = el<HTMLButtonElement>('sel-undo');
+  const selEdit = el<HTMLButtonElement>('sel-edit');
+  const selPos = el<HTMLButtonElement>('sel-pos');
+  const selColorsEl = selBar.querySelector<HTMLElement>('.quick-colors')!;
   const selColorButtons = [...selBar.querySelectorAll<HTMLButtonElement>('[data-sel-color]')];
   const ctxTarget = el('ctx-target');
   const ctxTargetColorButtons = [...ctxTarget.querySelectorAll<HTMLButtonElement>('[data-ctx-tcolor]')];
@@ -238,10 +247,19 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const handleEls = new Map<string, HTMLButtonElement>();
   let handleGeom: Geom | null = null;
 
-  const findSelected = (doc: BookSyncDocument): Exclude<Annotation, { kind: 'memo' }> | null => {
+  /** 選んでいる蛍光ペン・メモ */
+  const findSelected = (doc: BookSyncDocument): Annotation | null => {
     const a = selectedId ? visibleAnnotations(doc.annotations).find((x) => x.id === selectedId) : undefined;
+    return a ?? null;
+  };
+  /** 選んでいる蛍光ペン(メモのときは null) */
+  const findSelectedHighlight = (doc: BookSyncDocument): Exclude<Annotation, { kind: 'memo' }> | null => {
+    const a = findSelected(doc);
     return a && a.kind !== 'memo' ? a : null;
   };
+  /** 選ぶ操作の最中か(長押しからの状態、または注釈モードの「選ぶ」ツール) */
+  const selectMode = (): boolean => selecting || (active && tool === 'select');
+  const pinEls = new Map<string, HTMLElement>();
 
   /** 蛍光ペン(四角・線)を描く。取っ手をドラッグしている間は、仮の形で描く */
   function drawShapes(doc: BookSyncDocument, g: Geom): void {
@@ -286,6 +304,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     svg.replaceChildren();
     pins.replaceChildren();
     handleEls.clear();
+    pinEls.clear();
     preview = null;
     if (!doc || !g) return;
     // 選んでいる蛍光ペンが、このページに無い(ページを変えた・消えた)ときは、選択を外す
@@ -301,7 +320,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       if (a.at.x < region.x || a.at.x > region.x + region.w || a.at.y < region.y || a.at.y > region.y + region.h) continue;
       const pin = document.createElement('button');
       pin.type = 'button';
-      pin.className = 'memo-pin';
+      pin.className = 'memo-pin' + (a.id === selectedId ? ' selected' : '');
+      pin.dataset.id = a.id;
+      pinEls.set(a.id, pin);
       pin.textContent = '✎';
       pin.setAttribute('aria-label', `メモを開く: ${a.text.slice(0, 20)}`);
       pin.style.left = `${((a.at.x - region.x) / region.w) * 100}%`;
@@ -312,6 +333,13 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       pin.addEventListener('contextmenu', (e) => e.stopPropagation());
       pin.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (selectMode()) {
+          // 選ぶ操作の最中は、メモを開かずに、選ぶ(✥で動かせる)
+          selectedId = a.id;
+          render();
+          syncSelUi();
+          return;
+        }
         openEditor({ id: a.id, text: a.text });
       });
       pins.append(pin);
@@ -322,7 +350,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   // ---- 選んだ蛍光ペンの取っ手(動かす・伸ばす・縮める) ----
 
-  function handlePoints(a: Exclude<Annotation, { kind: 'memo' }>, geom: Geometry): Array<{ h: string; x: number; y: number }> {
+  function handlePoints(a: Annotation, geom: Geometry): Array<{ h: string; x: number; y: number }> {
+    if (a.kind === 'memo' && 'at' in geom) return [{ h: 'move', x: geom.at.x, y: geom.at.y }];
     if (a.kind === 'highlight-rect' && 'rect' in geom) {
       const r = geom.rect;
       return [
@@ -370,12 +399,20 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     return pts[pts.length - 1]!;
   }
 
-  function placeHandles(a: Exclude<Annotation, { kind: 'memo' }>): void {
+  function placeHandles(a: Annotation): void {
     const g = handleGeom;
     if (!g) return;
     const geom = live && live.id === a.id ? live.geom : geometryOf(a);
     if (!geom) return;
     const { region } = g.spec;
+    // メモは、ピンも、動かしている位置に合わせる
+    if (a.kind === 'memo' && 'at' in geom) {
+      const pin = pinEls.get(a.id);
+      if (pin) {
+        pin.style.left = `${((geom.at.x - region.x) / region.w) * 100}%`;
+        pin.style.top = `${((geom.at.y - region.y) / region.h) * 100}%`;
+      }
+    }
     for (const p of handlePoints(a, geom)) {
       const b = handleEls.get(p.h);
       if (!b) continue;
@@ -397,8 +434,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       b.className = 'sel-handle';
       b.dataset.h = p.h;
       if (p.h === 'move' && a.kind === 'highlight-stroke') b.classList.add('above'); // 線の上に、少し浮かせる(文字と端の取っ手を隠さない)
+      if (p.h === 'move' && a.kind === 'memo') b.classList.add('pin-move'); // ピンの上に浮かせる
       b.textContent = p.h === 'move' ? '✥' : '';
-      b.setAttribute('aria-label', p.h === 'move' ? '蛍光ペンを動かす' : '蛍光ペンの端を動かして伸ばす・縮める');
+      b.setAttribute('aria-label', p.h === 'move' ? (a.kind === 'memo' ? 'メモを動かす' : '蛍光ペンを動かす') : '蛍光ペンの端を動かして伸ばす・縮める');
       attachHandle(b, p.h);
       handleEls.set(p.h, b);
       pins.append(b);
@@ -411,6 +449,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     pointerId: number;
     id: string;
     before: Geometry;
+    beforePage: PageRef;
     /** つかんだ点の、元の位置(正規化)。動かす量だけを足して、新しい位置にする */
     orig: NormPoint;
     startClient: { x: number; y: number };
@@ -440,7 +479,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       const orig = handlePoints(a, geom).find((p) => p.h === name);
       if (!orig) return;
       btn.setPointerCapture(e.pointerId);
-      handleDrag = { name, pointerId: e.pointerId, id: a.id, before: geom, orig: { x: orig.x, y: orig.y }, startClient: { x: e.clientX, y: e.clientY }, changed: false };
+      handleDrag = { name, pointerId: e.pointerId, id: a.id, before: geom, beforePage: { ...a.page }, orig: { x: orig.x, y: orig.y }, startClient: { x: e.clientX, y: e.clientY }, changed: false };
     });
     btn.addEventListener('pointermove', (e) => {
       const d = handleDrag;
@@ -451,15 +490,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       const delta = deltaNorm(d.startClient, { x: e.clientX, y: e.clientY });
       if (!delta) return;
       const a = visibleAnnotations(doc.annotations).find((x) => x.id === d.id);
-      if (!a || a.kind === 'memo') return;
+      if (!a) return;
       let next: Geometry | null = null;
       const target = { x: d.orig.x + delta.x, y: d.orig.y + delta.y };
       if (d.name === 'move') {
-        next = movedGeometry({ ...a, ...d.before } as Annotation, delta.x, delta.y);
+        next = movedGeometry({ ...a, ...d.before } as Annotation, delta.x, delta.y, g.spec.region);
       } else if (a.kind === 'highlight-rect' && 'rect' in d.before) {
-        next = { rect: resizedRect(d.before.rect, d.name as RectCorner, target) };
+        next = { rect: resizedRect(d.before.rect, d.name as RectCorner, target, g.spec.region) };
       } else if (a.kind === 'highlight-stroke' && 'points' in d.before) {
-        next = { points: stretchedStroke(d.before.points, d.name as StrokeEnd, target, g.page) };
+        next = { points: stretchedStroke(d.before.points, d.name as StrokeEnd, target, g.page, g.spec.region) };
       }
       if (!next) return;
       live = { id: d.id, geom: next };
@@ -482,14 +521,18 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
         return;
       }
       const before = d.before;
+      const beforePage = d.beforePage;
       const after = l.geom;
       const id = d.id;
-      doc.annotations = setAnnotationGeometry(doc.annotations, id, after);
+      // 動かして、見開きの左右をまたいだら、属するページ(左/右)も替える(一覧・書き出しで、正しいページに載せるため)
+      const g = deps.getGeom();
+      const afterPage = g ? pageRef(geometryCenter(after), g, doc) : beforePage;
+      doc.annotations = setAnnotationGeometry(doc.annotations, id, after, Date.now(), afterPage);
       deps.commit();
       render();
       record({
-        undo: () => apply((list) => setAnnotationGeometry(list, id, before)),
-        redo: () => apply((list) => setAnnotationGeometry(list, id, after)),
+        undo: () => apply((list) => setAnnotationGeometry(list, id, before, Date.now(), beforePage)),
+        redo: () => apply((list) => setAnnotationGeometry(list, id, after, Date.now(), afterPage)),
       });
     };
     btn.addEventListener('pointerup', (e) => finish(e, false));
@@ -584,34 +627,101 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     if (was) renderBar();
   }
 
+  /** バーの案内(1行)。くわしい説明は、タップしたときの title に入れる */
   function quickMessage(): string {
     if (selecting) {
-      return selectedId
-        ? '●をドラッグして伸ばす・縮める。✥で動かす。色も変えられます。「完了」か「戻る」で終わります'
-        : '蛍光ペンをタップして選びます。選んだら、●で伸ばす・縮める、✥で動かせます。「完了」か「戻る」で終わります';
+      const doc = deps.getDoc();
+      const a = doc ? findSelected(doc) : null;
+      if (!a) return 'タップで、蛍光ペン・メモを選びます';
+      return a.kind === 'memo' ? '✥で動かします。「編集」で文章を直せます' : '●で伸ばす・縮める、✥で動かす';
     }
-    return (
-      (oneShot === 'rect' ? 'ドラッグで四角く囲みます。' : 'なぞって線を引きます。') +
-      `続けて引けます。${QUICK_IDLE_MS / 1000}秒引かないと、自動で戻ります。「完了」か「戻る」でも終わります`
-    );
+    return (oneShot === 'rect' ? 'ドラッグで四角く囲みます' : 'なぞって線を引きます') + '(続けて引けます)';
   }
+  const quickHelp = (): string =>
+    selecting
+      ? '選んで直している間は、自動では戻りません。「完了」か「戻る」で終わります'
+      : `続けて引けます。${QUICK_IDLE_MS / 1000}秒引かないと、自動で通常の読書に戻ります。「完了」か「戻る」でも終わります`;
 
   /** バーの表示(いまの操作・色・消すボタン・戻す)を、状態に合わせる */
   function syncQuickBar(): void {
     quickBar.hidden = !sessionOn();
-    if (quickBar.hidden) return;
+    if (quickBar.hidden) {
+      dockBars(); // 注釈モードの操作バーの位置は、ここで整える
+      return;
+    }
     quickText.textContent = quickMessage();
+    quickText.title = quickHelp();
     for (const b of quickToolButtons) {
       const t = b.dataset.quickTool;
       b.setAttribute('aria-pressed', String(t === 'select' ? selecting : t === oneShot));
     }
     // 蛍光ペンを選んでいる間は、色は、その蛍光ペンの色。それ以外は、新しく引く色
     const doc = deps.getDoc();
-    const sel = selecting && doc ? findSelected(doc) : null;
+    const selAny = selecting && doc ? findSelected(doc) : null;
+    const sel = selAny && selAny.kind !== 'memo' ? selAny : null;
     for (const b of quickColorButtons) b.setAttribute('aria-pressed', String(b.dataset.quickColor === (sel ? sel.color : color)));
-    quickDelete.hidden = !sel;
+    // メモを選んでいる間は、色の代わりに「編集」を出す
+    quickColorsEl.hidden = selAny?.kind === 'memo';
+    quickEdit.hidden = selAny?.kind !== 'memo';
+    quickDelete.hidden = !selAny;
     quickUndo.disabled = undoStack.length === 0;
+    dockBars();
   }
+
+  // ---- バーの位置(下が見えず、調整できないときのため): 自動・上・下 ----
+  let barPos: BarPos = (['auto', 'top', 'bottom'] as const).find((v) => v === read(BAR_POS_KEY)) ?? 'auto';
+  const POS_LABEL: Record<BarPos, string> = { auto: '⇅自動', top: '↑上', bottom: '↓下' };
+
+  /**
+   * 自動のときの位置。選んだものがあれば、その取っ手がバーに隠れない側。
+   * 何も選んでいなければ、ページ上の蛍光ペン・メモが、バーに隠れにくい側(同じなら、いまのまま)。
+   */
+  function autoPos(barEl: HTMLElement, bottomOffset: number): 'top' | 'bottom' {
+    const H = window.innerHeight;
+    const h = barEl.offsetHeight;
+    const bottomBarTop = H - bottomOffset - 8 - h;
+    const topBarBottom = 8 + h;
+    const hs = [...pins.querySelectorAll<HTMLElement>('.sel-handle')];
+    if (hs.length > 0) {
+      const rects = hs.map((x) => x.getBoundingClientRect());
+      const top = Math.min(...rects.map((r) => r.top)) - 14;
+      const bottom = Math.max(...rects.map((r) => r.bottom)) + 14;
+      const hitsBottom = bottom > bottomBarTop;
+      const hitsTop = top < topBarBottom;
+      return hitsBottom && !hitsTop ? 'top' : 'bottom';
+    }
+    const items = [...svg.querySelectorAll<SVGElement>('.hl:not(.preview)'), ...pins.querySelectorAll<HTMLElement>('.memo-pin')];
+    let nb = 0;
+    let nt = 0;
+    for (const it of items) {
+      const r = it.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      if (r.bottom > bottomBarTop) nb++;
+      if (r.top < topBarBottom) nt++;
+    }
+    if (nb > nt) return 'top';
+    if (nt > nb) return 'bottom';
+    return barEl.dataset.pos === 'top' ? 'top' : 'bottom';
+  }
+
+  function dockBars(): void {
+    const annOffset = active && !bar.hidden ? bar.offsetHeight + 8 : 0;
+    for (const [barEl, offset] of [[quickBar, 0], [selBar, annOffset]] as const) {
+      if (barEl.hidden) continue;
+      const pos = barPos === 'auto' ? autoPos(barEl, offset) : barPos;
+      barEl.dataset.pos = pos;
+      barEl.style.bottom = pos === 'bottom' && offset > 0 ? `${offset}px` : '';
+    }
+    for (const b of [quickPos, selPos]) b.textContent = POS_LABEL[barPos];
+  }
+
+  function cycleBarPos(): void {
+    barPos = barPos === 'auto' ? 'top' : barPos === 'top' ? 'bottom' : 'auto';
+    write(BAR_POS_KEY, barPos);
+    dockBars();
+  }
+  quickPos.addEventListener('click', cycleBarPos);
+  selPos.addEventListener('click', cycleBarPos);
 
   function renderQuickColors(): void {
     syncQuickBar();
@@ -625,12 +735,13 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     const a = doc ? findSelected(doc) : null;
     // 長押しからの操作は、下のバーに統合した。注釈モードの「選ぶ」ツールのときだけ、この操作バーを使う
     selBar.hidden = !a || selecting;
-    // 注釈ツールバーが出ているときは、その上に重ねる
-    selBar.style.bottom = active && !bar.hidden ? `${bar.offsetHeight + 8}px` : '';
-    for (const b of selColorButtons) b.setAttribute('aria-pressed', String(!!a && a.color === b.dataset.selColor));
-    el('sel-text').textContent = SEL_TEXT;
+    const hl = a && a.kind !== 'memo' ? a : null;
+    for (const b of selColorButtons) b.setAttribute('aria-pressed', String(!!hl && hl.color === b.dataset.selColor));
+    selColorsEl.hidden = a?.kind === 'memo';
+    selEdit.hidden = a?.kind !== 'memo';
+    el('sel-text').textContent = a?.kind === 'memo' ? '✥で動かします。「編集」で文章を直せます' : SEL_TEXT;
     selUndo.disabled = undoStack.length === 0;
-    syncQuickBar();
+    syncQuickBar(); // 位置(上・下)の調整も、ここで行う
   }
 
   function endSelection(rerender = true): void {
@@ -651,6 +762,11 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     preview?.remove();
     preview = null;
     selecting = !active; // 注釈モードのときは、「選ぶ」ツールの動きになる
+    if (active && tool !== 'select') {
+      tool = 'select';
+      write(TOOL_KEY, tool);
+      renderBar();
+    }
     selectedId = id;
     render();
     syncSelUi();
@@ -668,7 +784,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   function setSelectedColor(c: AnnotationColor): void {
     const doc = deps.getDoc();
-    const a = doc ? findSelected(doc) : null;
+    const a = doc ? findSelectedHighlight(doc) : null;
     if (!doc || !a || a.color === c) return;
     const id = a.id;
     const prev = a.color;
@@ -693,14 +809,25 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   function deleteSelected(): void {
     if (!selectedId) return;
     const id = selectedId;
+    const doc = deps.getDoc();
+    const isMemo = !!doc && doc.annotations.some((a) => a.id === id && a.kind === 'memo');
     // 長押しからの状態では、選んだ状態だけを外し、続けて選べるようにする。注釈モードでも同じ
     selectedId = null;
     live = null;
-    deleteHighlight(id);
+    if (isMemo) removeMemo(id); // メモは、「元に戻す」の通知つき
+    else deleteHighlight(id);
     syncSelUi();
   }
   el('sel-delete').addEventListener('click', deleteSelected);
   quickDelete.addEventListener('click', deleteSelected);
+  /** 選んでいるメモの文章を直す */
+  function editSelectedMemo(): void {
+    const doc = deps.getDoc();
+    const a = doc ? findSelected(doc) : null;
+    if (a && a.kind === 'memo') openEditor({ id: a.id, text: a.text });
+  }
+  selEdit.addEventListener('click', editSelectedMemo);
+  quickEdit.addEventListener('click', editSelectedMemo);
   el('sel-done').addEventListener('click', () => endSelection());
 
   function onDrawEnd(x: number, y: number, cancelled: boolean): void {
@@ -760,6 +887,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     memoText.value = e.text ?? '';
     disarmDelete();
     memoDelete.hidden = !e.id;
+    el('memo-move').hidden = !e.id; // 新しいメモは、置いた位置から。既存のメモだけ、位置を動かせる
     editor.hidden = false;
     memoText.focus();
   }
@@ -812,10 +940,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       return;
     }
     disarmDelete();
+    closeEditor();
+    removeMemo(id);
+  }
+
+  /** メモを削除し、「元に戻す」の通知を出す */
+  function removeMemo(id: string): void {
     const op: HistoryOp = { undo: () => apply((l) => restoreAnnotation(l, id)), redo: () => apply((l) => deleteAnnotation(l, id)) };
     apply((l) => deleteAnnotation(l, id));
     record(op);
-    closeEditor();
     deps.onDeleted?.('メモを削除しました', () => {
       // 履歴の最後に残っていれば、履歴からも外す(「戻す」を二重に押さないように)
       const i = undoStack.indexOf(op);
@@ -827,6 +960,15 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       op.undo();
     });
   }
+
+  /** 編集画面から、メモの位置を動かす状態へ */
+  function moveMemoFromEditor(): void {
+    const id = editing?.id;
+    if (!id) return;
+    closeEditor();
+    startSelection(id);
+  }
+  el('memo-move').addEventListener('click', moveMemoFromEditor);
 
   el('memo-save').addEventListener('click', saveMemo);
   memoDelete.addEventListener('click', deleteMemo);

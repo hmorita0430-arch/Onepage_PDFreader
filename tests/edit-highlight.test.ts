@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addRect,
   addStroke,
+  geometryCenter,
   geometryOf,
   movedGeometry,
   resizedRect,
@@ -19,7 +20,7 @@ import {
   parseOffset,
   spread,
 } from '../src/model/touchoffset';
-import type { HighlightRect, HighlightStroke } from '../src/model/types';
+import type { HighlightRect, HighlightStroke, Memo } from '../src/model/types';
 
 const page = { w: 2000, h: 1500 };
 const R = { pdfPage: 1, side: 'R' as const };
@@ -47,10 +48,33 @@ describe('蛍光ペンを動かす', () => {
     expect('points' in g2 && Math.max(...g2.points.map((p) => p.x))).toBeCloseTo(1, 9);
     expect('points' in g2 && g2.points[1]!.x - g2.points[0]!.x).toBeCloseTo(0.1, 9); // 形は保つ
   });
-  it('メモは対象外', () => {
+  it('メモ: 指定した量だけ動く。ページの外へは出ない', () => {
     const m = addMemo([], { page: R, at: { x: 0.5, y: 0.5 }, text: 'x' }, 1, 'm')[0]!;
-    expect(movedGeometry(m, 0.1, 0.1)).toBeNull();
-    expect(geometryOf(m)).toBeNull();
+    expect(movedGeometry(m, 0.1, -0.2)).toEqual({ at: { x: 0.6, y: 0.3 } });
+    expect(movedGeometry(m, 9, 9)).toEqual({ at: { x: 1, y: 1 } });
+    expect(movedGeometry(m, -9, -9)).toEqual({ at: { x: 0, y: 0 } });
+    expect(geometryOf(m)).toEqual({ at: { x: 0.5, y: 0.5 } });
+  });
+  it('メモを動かしても、本文は変わらない。更新日時が進む。左右をまたいだら、ページ(側)も替わる', () => {
+    const list = addMemo([], { page: R, at: { x: 0.8, y: 0.5 }, text: '大事な文章' }, 100, 'm');
+    const out = setAnnotationGeometry(list, 'm', { at: { x: 0.2, y: 0.6 } }, 200, { pdfPage: 1, side: 'L' });
+    const a = out[0] as Memo;
+    expect(a.text).toBe('大事な文章');
+    expect(a.at).toEqual({ x: 0.2, y: 0.6 });
+    expect(a.page).toEqual({ pdfPage: 1, side: 'L' });
+    expect(a.updatedAt).toBe(200);
+    // ページを渡さなければ、ページは変えない
+    expect((setAnnotationGeometry(list, 'm', { at: { x: 0.7, y: 0.5 }, }, 300)[0] as Memo).page.side).toBe('R');
+  });
+  it('蛍光ペンも、ページ(側)を置き換えられる(動かして、左右をまたいだとき)', () => {
+    const list = addRect([], { page: R, color: 'yellow', rect: { x: 0.6, y: 0.2, w: 0.1, h: 0.1 } }, 1, 'r');
+    const out = setAnnotationGeometry(list, 'r', { rect: { x: 0.1, y: 0.2, w: 0.1, h: 0.1 } }, 5, { pdfPage: 1, side: 'L' });
+    expect(out[0]!.page.side).toBe('L');
+  });
+  it('形の中心: 四角・線・メモ', () => {
+    expect(geometryCenter({ rect: { x: 0.2, y: 0.2, w: 0.2, h: 0.4 } })).toEqual({ x: 0.30000000000000004, y: 0.4 });
+    expect(geometryCenter({ at: { x: 0.3, y: 0.7 } })).toEqual({ x: 0.3, y: 0.7 });
+    expect(geometryCenter({ points: [{ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.6 }] })).toEqual({ x: 0.3, y: 0.55 });
   });
 });
 
@@ -182,5 +206,29 @@ describe('描画位置の補正', () => {
   it('補正なしの説明', () => {
     expect(describeOffset({ x: 0, y: 0 })).toBe('補正なし');
     expect(describeOffset({ x: -4, y: 0 })).toBe('左へ4px');
+  });
+});
+
+describe('動かせる範囲(いま表示している範囲)', () => {
+  const region = { x: 0.5, y: 0, w: 0.5, h: 1 }; // 見開きの右ページだけを表示
+  it('四角: 表示している範囲の外へは、動かせない(左ページへ消えない)', () => {
+    const a = addRect([], { page: R, color: 'yellow', rect: { x: 0.6, y: 0.2, w: 0.1, h: 0.1 } }, 1, 'r')[0]!;
+    const g = movedGeometry(a, -0.5, 0, region)!;
+    expect('rect' in g && g.rect.x).toBeCloseTo(0.5, 9);
+    const g2 = movedGeometry(a, 0.9, 0, region)!;
+    expect('rect' in g2 && g2.rect.x + g2.rect.w).toBeCloseTo(1, 9);
+  });
+  it('メモ・線も、表示している範囲の中に収まる', () => {
+    const m = addMemo([], { page: R, at: { x: 0.6, y: 0.5 }, text: 'x' }, 1, 'm')[0]!;
+    expect(movedGeometry(m, -0.4, 0, region)).toEqual({ at: { x: 0.5, y: 0.5 } });
+    const s = addStroke([], { page: R, color: 'pink', points: [{ x: 0.6, y: 0.5 }, { x: 0.8, y: 0.5 }] }, 1, 's')[0]!;
+    const g = movedGeometry(s, -0.4, 0, region)!;
+    expect('points' in g && Math.min(...g.points.map((p) => p.x))).toBeCloseTo(0.5, 9);
+  });
+  it('角・端を引いても、表示している範囲の外には出ない', () => {
+    const out = resizedRect({ x: 0.6, y: 0.2, w: 0.2, h: 0.1 }, 'nw', { x: 0.1, y: 0.1 }, region);
+    expect(out.x).toBeGreaterThanOrEqual(0.5 - 1e-9);
+    const st = stretchedStroke([{ x: 0.6, y: 0.5 }, { x: 0.7, y: 0.5 }], 'start', { x: 0.1, y: 0.5 }, page, region);
+    expect(Math.min(...st.map((p) => p.x))).toBeGreaterThanOrEqual(0.5 - 1e-9);
   });
 });

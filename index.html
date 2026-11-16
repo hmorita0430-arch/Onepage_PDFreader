@@ -356,6 +356,7 @@
           <button type="button" data-quick-tool="rect" aria-pressed="false">▭ 四角</button>
           <button type="button" data-quick-tool="stroke" aria-pressed="false">〰 なぞる</button>
           <button type="button" data-quick-tool="select" aria-pressed="false">✥ 選ぶ</button>
+          <button id="quick-pos" type="button" class="pos-btn" aria-label="バーの位置(自動・上・下)">⇅自動</button>
         </span>
         <span class="quick-colors" role="group" aria-label="色">
           <button type="button" data-quick-color="yellow" aria-label="黄" aria-pressed="true"></button>
@@ -363,6 +364,7 @@
           <button type="button" data-quick-color="pink" aria-label="ピンク" aria-pressed="false"></button>
           <button type="button" data-quick-color="blue" aria-label="青" aria-pressed="false"></button>
         </span>
+        <button id="quick-edit" type="button" hidden>✎ 編集</button>
         <button id="quick-undo" type="button" aria-label="元に戻す" disabled>↶ 戻す</button>
         <button id="quick-delete" class="danger" type="button" hidden>消す</button>
         <button id="quick-done" class="primary" type="button">完了</button>
@@ -371,6 +373,8 @@
       <!-- 選んだ蛍光ペン(動かす・伸ばす・縮める・消す・色を変える) -->
       <div id="sel-bar" class="quick-bar" hidden role="group" aria-label="選んだ蛍光ペン">
         <span id="sel-text" class="quick-text" role="status">●をドラッグして伸ばす・縮める。✥で動かす</span>
+        <button id="sel-pos" type="button" class="pos-btn" aria-label="バーの位置(自動・上・下)">⇅自動</button>
+        <button id="sel-edit" type="button" hidden>✎ 編集</button>
         <span class="quick-colors" role="group" aria-label="この蛍光ペンの色">
           <button type="button" data-sel-color="yellow" aria-label="黄" aria-pressed="false"></button>
           <button type="button" data-sel-color="green" aria-label="緑" aria-pressed="false"></button>
@@ -411,6 +415,9 @@
           <div class="memo-actions">
             <button id="memo-save" class="primary" type="button">保存</button>
             <button id="memo-cancel" class="secondary" type="button">閉じる</button>
+          </div>
+          <div class="memo-move-row">
+            <button id="memo-move" class="secondary" type="button" hidden>✥ このメモの位置を動かす</button>
           </div>
           <!-- 削除は、保存・閉じるから離して置く。2回押さないと消えない -->
           <div class="memo-danger">
