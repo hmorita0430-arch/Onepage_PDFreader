@@ -57,6 +57,8 @@ export interface AnnotateDeps {
   onModeChange(active: boolean): void;
   /** タッチ(指)で描くときの位置の補正(画面のピクセル)。なければ、補正なし */
   touchOffset?(): { x: number; y: number };
+  /** 削除したことを知らせ、「元に戻す」を出す(誤って消したときのため) */
+  onDeleted?(message: string, undo: () => void): void;
 }
 
 type Tool = 'rect' | 'stroke' | 'memo' | 'erase' | 'select';
@@ -756,12 +758,14 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   function openEditor(e: { id?: string; text?: string; at?: NormPoint; page?: PageRef }): void {
     editing = { id: e.id, at: e.at, page: e.page, prevText: e.text };
     memoText.value = e.text ?? '';
+    disarmDelete();
     memoDelete.hidden = !e.id;
     editor.hidden = false;
     memoText.focus();
   }
 
   function closeEditor(): void {
+    disarmDelete();
     editing = null;
     editor.hidden = true;
   }
@@ -788,13 +792,40 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     closeEditor();
   }
 
+  // 削除は2回押し: 1回目で「もう一度押すと削除します」に変わり、数秒で元に戻る。2回目で削除する
+  const DELETE_ARM_MS = 4000;
+  let deleteArmTimer: ReturnType<typeof setTimeout> | undefined;
+  function disarmDelete(): void {
+    clearTimeout(deleteArmTimer);
+    memoDelete.classList.remove('armed');
+    memoDelete.textContent = 'このメモを削除…';
+  }
+
   function deleteMemo(): void {
     const id = editing?.id;
     if (!deps.getDoc() || !id) return;
-    if (!confirm('このメモを削除しますか?')) return;
+    if (!memoDelete.classList.contains('armed')) {
+      memoDelete.classList.add('armed');
+      memoDelete.textContent = 'もう一度押すと削除します';
+      clearTimeout(deleteArmTimer);
+      deleteArmTimer = setTimeout(disarmDelete, DELETE_ARM_MS);
+      return;
+    }
+    disarmDelete();
+    const op: HistoryOp = { undo: () => apply((l) => restoreAnnotation(l, id)), redo: () => apply((l) => deleteAnnotation(l, id)) };
     apply((l) => deleteAnnotation(l, id));
-    record({ undo: () => apply((l) => restoreAnnotation(l, id)), redo: () => apply((l) => deleteAnnotation(l, id)) });
+    record(op);
     closeEditor();
+    deps.onDeleted?.('メモを削除しました', () => {
+      // 履歴の最後に残っていれば、履歴からも外す(「戻す」を二重に押さないように)
+      const i = undoStack.indexOf(op);
+      if (i >= 0) {
+        undoStack.splice(i, 1);
+        redoStack.push(op);
+        renderBar();
+      }
+      op.undo();
+    });
   }
 
   el('memo-save').addEventListener('click', saveMemo);

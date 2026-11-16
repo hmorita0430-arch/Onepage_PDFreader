@@ -1,4 +1,4 @@
-import { COLORS, COLOR_KEYS, deleteAnnotation, setAnnotationColor, setHighlightText, visibleAnnotations } from '../model/annotations';
+import { COLORS, COLOR_KEYS, deleteAnnotation, restoreAnnotation, setAnnotationColor, setHighlightText, visibleAnnotations } from '../model/annotations';
 import type { ViewSpec } from '../model/layout';
 import { addNamedPage, chapterTitleAt, deleteNamedPage, renameNamedPage, visibleNamed } from '../model/named';
 import { findIndex, formatPageLabel, jumpTarget, type LogicalPage } from '../model/pages';
@@ -22,6 +22,8 @@ export interface NavDeps {
   commit(): void;
   /** 既存のメモを入力欄で開く */
   editMemo(id: string): void;
+  /** 削除したことを知らせ、「元に戻す」を出す */
+  onDeleted(message: string, undo: () => void): void;
   /** 蛍光ペンの箇所の文字(文字データが無ければ null) */
   ocrTexts(annos: Annotation[]): Promise<Map<string, string | null>>;
   /** 蛍光ペンの箇所を、端末内のOCRで読み取る(画像は端末の外へ送らない) */
@@ -313,11 +315,31 @@ export function createNav(deps: NavDeps) {
     del.className = 'danger';
     del.textContent = '削除';
     del.setAttribute('aria-label', `${kindLabel(a)}を削除`);
+    // 2回押し: 1回目で「もう一度押すと削除」に変わり、数秒で元に戻る。消したあとは、「元に戻す」を出す
+    let armTimer: ReturnType<typeof setTimeout> | undefined;
     del.addEventListener('click', () => {
-      if (!confirm('この注釈を削除しますか?')) return;
-      doc.annotations = deleteAnnotation(doc.annotations, a.id);
+      if (!del.classList.contains('armed')) {
+        del.classList.add('armed');
+        del.textContent = 'もう一度で削除';
+        clearTimeout(armTimer);
+        armTimer = setTimeout(() => {
+          del.classList.remove('armed');
+          del.textContent = '削除';
+        }, 4000);
+        return;
+      }
+      clearTimeout(armTimer);
+      const id = a.id;
+      doc.annotations = deleteAnnotation(doc.annotations, id);
       deps.commit();
       renderAnnos();
+      deps.onDeleted(`${kindLabel(a)}を削除しました`, () => {
+        const d = deps.getDoc();
+        if (!d) return;
+        d.annotations = restoreAnnotation(d.annotations, id);
+        deps.commit();
+        renderAnnos();
+      });
     });
     li.append(del);
     if (a.kind !== 'memo') li.append(ocrControls(a));

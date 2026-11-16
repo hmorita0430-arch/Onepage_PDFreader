@@ -286,6 +286,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
 function closeBook(viaBack = false): void {
   clearTimeout(introTimer);
   hideFinishPrompt();
+  hideUndoToast();
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
@@ -781,6 +782,7 @@ const nav = createNav({
     annot.render();
   },
   editMemo: (id) => annot.editMemo(id),
+  onDeleted: showUndoToast,
   ocrTexts: (annos) => highlightTexts(viewer, annos),
   ocrRecognize: (a, orientation, onStatus) => recognizeHighlight(a, orientation, onStatus),
   ocrOrientation: () => defaultOrientation(doc?.settings.openDirection ?? 'rtl'),
@@ -815,6 +817,30 @@ async function recognizeHighlight(a: Annotation, orientation: Orientation, onSta
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
 
+// 削除したあとの「元に戻す」(数秒)。誤って消したときのため
+const undoToast = $('undo-toast');
+const undoToastText = $('undo-toast-text');
+let undoToastTimer: ReturnType<typeof setTimeout> | undefined;
+let undoToastAction: (() => void) | null = null;
+const UNDO_TOAST_MS = 8000;
+function hideUndoToast(): void {
+  clearTimeout(undoToastTimer);
+  undoToast.hidden = true;
+  undoToastAction = null;
+}
+function showUndoToast(message: string, undo: () => void): void {
+  clearTimeout(undoToastTimer);
+  undoToastText.textContent = message;
+  undoToastAction = undo;
+  undoToast.hidden = false;
+  undoToastTimer = setTimeout(hideUndoToast, UNDO_TOAST_MS);
+}
+$('undo-toast-btn').addEventListener('click', () => {
+  const act = undoToastAction;
+  hideUndoToast();
+  act?.();
+});
+
 // 指で描くときの位置の補正(この端末内の設定。「描画位置の確認」で測る)
 let drawOffset: Offset = loadOffset();
 const drawOffsetText = $('draw-offset-now');
@@ -836,6 +862,7 @@ $('open-calib').addEventListener('click', () => {
 const annot = createAnnotator(
   {
     touchOffset: () => drawOffset,
+    onDeleted: showUndoToast,
     getDoc: () => doc,
     getGeom: () => (doc && shownSpec ? { spec: shownSpec, fit, page: pageSize, box: hostBox(), view } : null),
     prev: () => goPrev(),

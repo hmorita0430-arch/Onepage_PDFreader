@@ -443,3 +443,19 @@ button.continue { text-align: left; padding-top: 8px; padding-bottom: 8px; }
 .quick-modes { display: flex; flex: 1 1 100%; gap: 6px; justify-content: center; }
 .quick-modes button { flex: 1 1 0; width: auto; margin: 0; min-height: 44px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--muted); background: transparent; color: var(--text); font: inherit; white-space: nowrap; }
 .quick-modes button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 600; }
+
+/* メモの削除: 保存・閉じるから離す。2回押し */
+.memo-danger { margin-top: 32px; padding-top: 12px; border-top: 1px solid var(--muted); display: flex; justify-content: flex-start; }
+.memo-card button.danger-link { width: auto; margin: 0; min-height: 44px; padding: 0 12px; border: 1px solid transparent; border-radius: 10px; background: none; color: var(--danger); font: inherit; font-size: 0.9rem; text-decoration: underline; }
+.memo-card button.danger-link.armed, .anno-row button.danger.armed { background: var(--danger); color: var(--surface); border-color: var(--danger); text-decoration: none; font-weight: 600; }
+.anno-row button.danger { margin-left: 14px; }
+
+/* 削除したあとの「元に戻す」(数秒) */
+.undo-toast {
+  position: absolute; left: 50%; transform: translateX(-50%); z-index: 12;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; gap: 4px; max-width: calc(100% - 16px);
+  padding: 4px 4px 4px 16px; border-radius: 24px; background: var(--surface); border: 1px solid var(--accent);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4); font-size: 0.9rem;
+}
+.undo-toast button { width: auto; margin: 0; min-height: 44px; padding: 0 14px; border: none; border-radius: 22px; background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 600; }

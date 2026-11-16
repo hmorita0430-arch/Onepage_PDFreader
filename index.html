@@ -191,6 +191,11 @@
         <p id="version-reader" class="muted"></p>
         <button id="close-settings" class="primary" type="button">閉じる</button>
       </aside>
+      <div id="undo-toast" class="undo-toast" hidden role="status" aria-live="polite">
+        <span id="undo-toast-text"></span>
+        <button id="undo-toast-btn" type="button">元に戻す</button>
+      </div>
+
       <section id="calib" class="calib" hidden role="dialog" aria-label="描画位置の確認">
         <header class="nav-head">
           <h2 class="preview-title">描画位置の確認</h2>
@@ -392,8 +397,11 @@
           <textarea id="memo-text" maxlength="2000" rows="6" placeholder="メモ(Ctrl+Enterで保存)"></textarea>
           <div class="memo-actions">
             <button id="memo-save" class="primary" type="button">保存</button>
-            <button id="memo-delete" class="danger" type="button">削除</button>
             <button id="memo-cancel" class="secondary" type="button">閉じる</button>
+          </div>
+          <!-- 削除は、保存・閉じるから離して置く。2回押さないと消えない -->
+          <div class="memo-danger">
+            <button id="memo-delete" class="danger-link" type="button">このメモを削除…</button>
           </div>
         </div>
       </div>
