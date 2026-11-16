@@ -52,6 +52,8 @@ import { clearDestination, describeDestination, loadDestination, saveDestination
 import { highlightTexts, prepareExport, uploadExport, type ExportPackage } from './export/exporter';
 import { createPreview } from './ui/preview';
 import { createCalibration } from './ui/calibrate';
+import { AWAKE_OPTIONS, loadAwakeMode, parseAwakeMode, saveAwakeMode, type AwakeMode } from './model/awake';
+import { createAwake, type AwakeStatus } from './reader/wakelock';
 import { describeOffset, loadOffset, saveOffset, type Offset } from './model/touchoffset';
 import { loadIncludeImages, saveIncludeImages } from './export/options';
 import { attachGestures } from './reader/gestures';
@@ -280,6 +282,7 @@ async function openBook(bookId: string, name: string, data: ArrayBuffer): Promis
   armAutoReconnect();
   await renderCurrent();
   showIntroMenu(); // 開いた直後に、数秒だけ、メニューとページ番号を見せる
+  awake.start(); // 読書中は、画面を点けたままにする
 }
 
 /** @param viaBack ブラウザの「戻る」で閉じる場合。履歴は、ブラウザがすでに1つ戻している */
@@ -287,6 +290,7 @@ function closeBook(viaBack = false): void {
   clearTimeout(introTimer);
   hideFinishPrompt();
   hideUndoToast();
+  awake.stop();
   flushPosition();
   void syncNow(); // 閉じる前の変更を、接続中なら送る
   nav.reset();
@@ -816,6 +820,40 @@ async function recognizeHighlight(a: Annotation, orientation: Orientation, onSta
 }
 
 // ---------- 注釈(蛍光ペン・位置つきメモ) ----------
+
+// 読書中に、画面を点けたままにする(最後の操作から、設定の時間まで)
+let awakeMode: AwakeMode = loadAwakeMode();
+const awakeSelects = [$<HTMLSelectElement>('awake-select-start'), $<HTMLSelectElement>('awake-select-reader')];
+const awakeNotes = [$('awake-note'), $('awake-note-reader')];
+function awakeNoteText(s: AwakeStatus): string {
+  if (s === 'unsupported') return 'この端末・ブラウザでは、画面を点けておく機能が使えません(端末の設定の自動消灯の時間に従います)。';
+  if (s === 'denied') return '端末が許可しませんでした(省電力モードなど)。端末の設定の自動消灯の時間に従います。';
+  if (awakeMode === 'standard') return '端末の設定の、自動消灯の時間に従います。';
+  return awakeMode === 'always'
+    ? '本を開いている間は、画面を暗くしません(バッテリーの消費が増えます。使い終えたら、本を閉じてください)。'
+    : '本を開いている間、最後に画面を触ってから、この時間は暗くしません。過ぎたら、端末の設定に戻ります。';
+}
+const awake = createAwake({
+  getMode: () => awakeMode,
+  onStatus: (s) => renderAwake(s),
+});
+function renderAwake(s: AwakeStatus = awake.status()): void {
+  for (const sel of awakeSelects) {
+    sel.value = awakeMode;
+    sel.disabled = s === 'unsupported';
+  }
+  for (const n of awakeNotes) n.textContent = awakeNoteText(s);
+}
+for (const sel of awakeSelects) {
+  sel.replaceChildren(...AWAKE_OPTIONS.map((o) => Object.assign(document.createElement('option'), { value: o.value, textContent: o.label })));
+  sel.addEventListener('change', () => {
+    awakeMode = parseAwakeMode(sel.value);
+    saveAwakeMode(awakeMode);
+    renderAwake();
+    awake.modeChanged();
+  });
+}
+renderAwake();
 
 // 削除したあとの「元に戻す」(数秒)。誤って消したときのため
 const undoToast = $('undo-toast');

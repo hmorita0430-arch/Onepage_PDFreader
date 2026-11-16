@@ -60,6 +60,13 @@
       </section>
 
       <section class="library">
+        <div class="library-head awake-head">
+          <h2>画面</h2>
+          <label class="sort">点けておく時間
+            <select id="awake-select-start"></select>
+          </label>
+        </div>
+        <p id="awake-note" class="muted"></p>
         <div class="library-head">
           <h2>表示</h2>
           <label class="sort">テーマ
@@ -159,6 +166,12 @@
           </div>
           <p id="reading-summary" class="muted"></p>
           <p id="reading-error" class="error" hidden role="alert"></p>
+        </fieldset>
+        <fieldset>
+          <legend>画面を点けておく時間(この端末)</legend>
+          <p class="muted">本を開いている間、最後に画面を触ってから、この時間は、画面を暗くしません。</p>
+          <select id="awake-select-reader" aria-label="画面を点けておく時間"></select>
+          <p id="awake-note-reader" class="muted"></p>
         </fieldset>
         <fieldset>
           <legend>蛍光ペンの描画位置(この端末)</legend>
