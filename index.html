@@ -17,7 +17,7 @@
         // 目に優しい表示(暖色・紙の色)も、描画の前に当てる。計算は src/model/eyecomfort.ts と同じ(上限 0.5 / 0.9)
         try {
           var e = JSON.parse(localStorage.getItem('eye-comfort:v1') || 'null');
-          if (e && e.on !== false) { // 以前の版の「切っている」保存値は、効かせない
+          if (e && e.on !== false) {
             var pc = function (v) { return typeof v === 'number' && isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 0; };
             document.documentElement.style.setProperty('--eye-warm', String(Math.round((pc(e.warm) / 100) * 0.5 * 1000) / 1000));
             document.documentElement.style.setProperty('--eye-paper', String(Math.round((pc(e.paper) / 100) * 0.9 * 1000) / 1000));
@@ -137,7 +137,10 @@
       </div>
 
       <footer id="bottombar" class="bar bottom" hidden>
-        <span id="page-label"></span>
+        <div class="bottom-row">
+          <span id="page-label"></span>
+          <button id="eye-toggle" class="eye-toggle" type="button" aria-pressed="false" aria-label="目に優しい表示のオン・オフ">☀ 目に優しい: オフ</button>
+        </div>
         <input id="page-slider" type="range" min="0" max="0" step="1" value="0" aria-label="ページ移動(スライダー)" />
       </footer>
 
@@ -193,6 +196,7 @@
         </fieldset>
         <fieldset>
           <legend>目に優しい表示(この端末)</legend>
+          <p class="muted">読書中は、画面下のメニューの「☀ 目に優しい」から、すぐオン・オフできます。</p>
           <label class="eye-row">暖色フィルタ(青い光を弱める) <output id="eye-warm-out-reader">0%</output>
             <input type="range" min="0" max="100" step="5" value="0" data-eye="warm" aria-label="暖色フィルタの強さ" />
           </label>
