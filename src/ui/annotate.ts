@@ -132,7 +132,6 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const quickDelete = el<HTMLButtonElement>('quick-delete');
   const quickEdit = el<HTMLButtonElement>('quick-edit');
   const quickPos = el<HTMLButtonElement>('quick-pos');
-  const quickCompact = el<HTMLButtonElement>('quick-compact');
   const quickColorsEl = quickBar.querySelector<HTMLElement>('.quick-colors')!;
   const selBar = el('sel-bar');
   const selUndo = el<HTMLButtonElement>('sel-undo');
@@ -621,7 +620,6 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   /** 続けて引く・選ぶ、の状態を、すべて終える(通常の読書に戻る) */
   function endSession(): void {
     const was = sessionOn();
-    compactMode = 'auto';
     oneShot = null;
     clearTimeout(quickTimer);
     endSelection();
@@ -674,33 +672,24 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   let barPos: BarPos = (['auto', 'top', 'bottom'] as const).find((v) => v === read(BAR_POS_KEY)) ?? 'auto';
   const POS_LABEL: Record<BarPos, string> = { auto: '⇅自動', top: '↑上', bottom: '↓下' };
 
-  /** バーを小さくするか: 自動(両側とも隠れるときだけ)・小さく(手動)・広げる(手動)。「完了」などで終わると、自動に戻る */
-  let compactMode: 'auto' | 'compact' | 'full' = 'auto';
-
-  /** この高さのバーを、下・上に置いたとき、選んだものの取っ手が、バーに隠れる数 */
-  function handleHits(barEl: HTMLElement, bottomOffset: number): { bottom: number; top: number } {
-    const hs = [...pins.querySelectorAll<HTMLElement>('.sel-handle')];
-    const h = barEl.offsetHeight;
-    const bottomBarTop = window.innerHeight - bottomOffset - 8 - h;
-    const topBarBottom = 8 + h;
-    let bottom = 0;
-    let top = 0;
-    for (const x of hs) {
-      const r = x.getBoundingClientRect();
-      if (r.bottom + 14 > bottomBarTop) bottom++;
-      if (r.top - 14 < topBarBottom) top++;
-    }
-    return { bottom, top };
-  }
-
   /**
-   * 自動のときの位置(上・下)。選んだものがあれば、その取っ手が、バーに隠れない側。
+   * 自動のときの位置。選んだものがあれば、その取っ手がバーに隠れない側。
    * 何も選んでいなければ、ページ上の蛍光ペン・メモが、バーに隠れにくい側(同じなら、いまのまま)。
    */
-  function autoPosNoSelection(barEl: HTMLElement, bottomOffset: number): 'top' | 'bottom' {
+  function autoPos(barEl: HTMLElement, bottomOffset: number): 'top' | 'bottom' {
+    const H = window.innerHeight;
     const h = barEl.offsetHeight;
-    const bottomBarTop = window.innerHeight - bottomOffset - 8 - h;
+    const bottomBarTop = H - bottomOffset - 8 - h;
     const topBarBottom = 8 + h;
+    const hs = [...pins.querySelectorAll<HTMLElement>('.sel-handle')];
+    if (hs.length > 0) {
+      const rects = hs.map((x) => x.getBoundingClientRect());
+      const top = Math.min(...rects.map((r) => r.top)) - 14;
+      const bottom = Math.max(...rects.map((r) => r.bottom)) + 14;
+      const hitsBottom = bottom > bottomBarTop;
+      const hitsTop = top < topBarBottom;
+      return hitsBottom && !hitsTop ? 'top' : 'bottom';
+    }
     const items = [...svg.querySelectorAll<SVGElement>('.hl:not(.preview)'), ...pins.querySelectorAll<HTMLElement>('.memo-pin')];
     let nb = 0;
     let nt = 0;
@@ -717,34 +706,14 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
 
   function dockBars(): void {
     const annOffset = active && !bar.hidden ? bar.offsetHeight + 8 : 0;
-    const hasSel = pins.querySelector('.sel-handle') !== null;
     for (const [barEl, offset] of [[quickBar, 0], [selBar, annOffset]] as const) {
       if (barEl.hidden) continue;
-      barEl.classList.toggle('compact', compactMode === 'compact');
-      let pos: 'top' | 'bottom';
-      if (barPos !== 'auto') pos = barPos;
-      else if (hasSel) {
-        let hits = handleHits(barEl, offset);
-        // 上のバーにも、下のバーにも、取っ手が隠れる(縦に長いものを選んだ)ときは、バーを小さくして、隠れにくくする
-        if (compactMode === 'auto' && hits.bottom > 0 && hits.top > 0) {
-          barEl.classList.add('compact');
-          hits = handleHits(barEl, offset);
-        }
-        pos = hits.bottom === 0 ? 'bottom' : hits.top === 0 ? 'top' : hits.top < hits.bottom ? 'top' : 'bottom';
-      } else pos = autoPosNoSelection(barEl, offset);
+      const pos = barPos === 'auto' ? autoPos(barEl, offset) : barPos;
       barEl.dataset.pos = pos;
       barEl.style.bottom = pos === 'bottom' && offset > 0 ? `${offset}px` : '';
     }
     for (const b of [quickPos, selPos]) b.textContent = POS_LABEL[barPos];
-    const small = quickBar.classList.contains('compact');
-    quickCompact.textContent = small ? '▴' : '▾ 小さく';
-    quickCompact.setAttribute('aria-label', small ? 'バーを広げる' : 'バーを小さくする');
   }
-
-  quickCompact.addEventListener('click', () => {
-    compactMode = quickBar.classList.contains('compact') ? 'full' : 'compact';
-    dockBars();
-  });
 
   function cycleBarPos(): void {
     barPos = barPos === 'auto' ? 'top' : barPos === 'top' ? 'bottom' : 'auto';
