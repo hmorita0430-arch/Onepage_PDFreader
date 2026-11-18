@@ -13,8 +13,9 @@ function emitServiceWorker(): Plugin {
       const built = Object.keys(bundle).filter((f) => !f.endsWith('.map'));
       // index.html は generateBundle の後に出力されるため、一覧には明示的に加える
       const files = ['./', 'index.html', ...built.filter((f) => f !== 'index.html'), 'manifest.webmanifest', 'icon.svg'];
-      const version = createHash('sha256').update(files.join('\n')).digest('hex').slice(0, 10);
       const template = readFileSync(fileURLToPath(new URL('./sw/sw.template.js', import.meta.url)), 'utf8');
+      // 版は、ファイル一覧と、サービスワーカーの作りの両方で決める(作りだけ直したときも、保存し直す)
+      const version = createHash('sha256').update(files.join('\n')).update(template).digest('hex').slice(0, 10);
       this.emitFile({
         type: 'asset',
         fileName: 'sw.js',

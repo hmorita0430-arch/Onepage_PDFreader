@@ -9,7 +9,9 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches
       .open(CACHE)
-      .then((c) => c.addAll(FILES.map((f) => new URL(f, self.registration.scope).href)))
+      // ブラウザの一時キャッシュ(配信側が10分など保持させる)を使わず、必ず配信元から取り直す。
+      // 使うと、直前の版の index.html を新しい版として保存し、消えたファイルを探して画面が崩れる
+      .then((c) => c.addAll(FILES.map((f) => new Request(new URL(f, self.registration.scope).href, { cache: 'reload' }))))
       .then(() => self.skipWaiting()),
   );
 });
