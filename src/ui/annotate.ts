@@ -20,6 +20,8 @@ import {
   sideAt,
   smoothPath,
   straightLine,
+  nearestThickness,
+  setStrokeWidth,
   stretchedStroke,
   updateMemoText,
   visibleAnnotations,
@@ -79,7 +81,7 @@ const MIN_LINE_PX = 6;
 
 const HINTS: Record<Tool, string> = {
   rect: 'ドラッグで四角く囲みます。',
-  stroke: 'ドラッグでまっすぐな線を引きます(ほぼ水平なら水平になります)。',
+  stroke: 'ドラッグでまっすぐな線を引きます。',
   memo: 'メモを置く場所をタップします。',
   erase: '消したい蛍光ペンをタップします。',
   select: '蛍光ペンをタップして選びます。●をドラッグして伸ばす・縮める、✥で動かします。',
@@ -136,6 +138,10 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   const selEdit = el<HTMLButtonElement>('sel-edit');
   const selPos = el<HTMLButtonElement>('sel-pos');
   const selColorsEl = selBar.querySelector<HTMLElement>('.quick-colors')!;
+  const selWidthsEl = el('sel-widths');
+  const selWidthButtons = [...selBar.querySelectorAll<HTMLButtonElement>('[data-sel-width]')];
+  const quickWidthsEl = el('quick-widths');
+  const quickWidthButtons = [...quickBar.querySelectorAll<HTMLButtonElement>('[data-quick-width]')];
   const selColorButtons = [...selBar.querySelectorAll<HTMLButtonElement>('[data-sel-color]')];
   const ctxTarget = el('ctx-target');
   const ctxTargetColorButtons = [...ctxTarget.querySelectorAll<HTMLButtonElement>('[data-ctx-tcolor]')];
@@ -593,8 +599,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       preview?.remove();
       preview = null;
       if (drag.moved < MIN_LINE_PX) return; // ほとんど動いていないうちは、線を出さない
-      // 定規で引くように、始点から指の位置まで、まっすぐ(ほぼ水平なら水平)の線で見せる
-      const pts = straightLine(drag.start, n.p, g.page);
+      // 定規で引くように、始点から指の位置まで、まっすぐの線で見せる
+      const pts = straightLine(drag.start, n.p);
       preview = shapeEl({ kind: 'stroke', d: smoothPath(pts.map((p) => ({ x: p.x * W, y: p.y * H }))), width: STROKE_WIDTHS[thickness] * W, css });
       preview.setAttribute('class', 'hl preview');
       svg.append(preview);
@@ -656,6 +662,11 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     const selAny = selecting && doc ? findSelected(doc) : null;
     const sel = selAny && selAny.kind !== 'memo' ? selAny : null;
     for (const b of quickColorButtons) b.setAttribute('aria-pressed', String(b.dataset.quickColor === (sel ? sel.color : color)));
+    // 線の太さ: 直線を引く間と、直線を選んでいる間だけ出す。選んでいる間は、その線の太さ
+    const strokeSel = sel && sel.kind === 'highlight-stroke' ? sel : null;
+    quickWidthsEl.hidden = selecting ? !strokeSel : oneShot !== 'stroke';
+    const curWidth = strokeSel ? nearestThickness(strokeSel.width) : thickness;
+    for (const b of quickWidthButtons) b.setAttribute('aria-pressed', String(b.dataset.quickWidth === curWidth));
     // メモを選んでいる間は、色の代わりに「編集」を出す
     quickColorsEl.hidden = selAny?.kind === 'memo';
     quickEdit.hidden = selAny?.kind !== 'memo';
@@ -733,6 +744,9 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     selBar.hidden = !a || selecting;
     const hl = a && a.kind !== 'memo' ? a : null;
     for (const b of selColorButtons) b.setAttribute('aria-pressed', String(!!hl && hl.color === b.dataset.selColor));
+    const strokeA = a && a.kind === 'highlight-stroke' ? a : null;
+    selWidthsEl.hidden = !strokeA;
+    for (const b of selWidthButtons) b.setAttribute('aria-pressed', String(!!strokeA && nearestThickness(strokeA.width) === b.dataset.selWidth));
     selColorsEl.hidden = a?.kind === 'memo';
     selEdit.hidden = a?.kind !== 'memo';
     el('sel-text').textContent = a?.kind === 'memo' ? '✥で動かします。「編集」で文章を直せます' : SEL_TEXT;
@@ -787,6 +801,35 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     apply((l) => setAnnotationColor(l, id, c));
     record({ undo: () => apply((l) => setAnnotationColor(l, id, prev)), redo: () => apply((l) => setAnnotationColor(l, id, c)) });
     syncSelUi();
+  }
+
+  /** 選んでいる直線の太さを変える(「戻す」で元の太さに戻る) */
+  function setSelectedWidth(t: StrokeThickness): void {
+    const doc = deps.getDoc();
+    const a = doc ? findSelectedHighlight(doc) : null;
+    if (!doc || !a || a.kind !== 'highlight-stroke') return;
+    const w = STROKE_WIDTHS[t];
+    if (a.width === w) return;
+    const id = a.id;
+    const prev = a.width;
+    apply((l) => setStrokeWidth(l, id, w));
+    record({ undo: () => apply((l) => setStrokeWidth(l, id, prev)), redo: () => apply((l) => setStrokeWidth(l, id, w)) });
+    syncSelUi();
+  }
+  for (const b of selWidthButtons) b.addEventListener('click', () => setSelectedWidth(b.dataset.selWidth as StrokeThickness));
+  for (const b of quickWidthButtons) {
+    b.addEventListener('click', () => {
+      const t = b.dataset.quickWidth as StrokeThickness;
+      if (selecting && selectedId) {
+        setSelectedWidth(t); // 直線を選んでいる間は、その線の太さを変える
+        return;
+      }
+      thickness = t;
+      write(WIDTH_STORE, thickness);
+      renderBar();
+      syncQuickBar();
+      if (oneShot) armQuickIdle();
+    });
   }
 
   function deleteHighlight(id: string): void {
@@ -847,8 +890,8 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       render();
       recordCreate(next[next.length - 1]!.id);
     } else if (t === 'stroke' && Math.hypot(x - d.sx, y - d.sy) >= MIN_LINE_PX) {
-      // 定規で引いたような直線(2点)。ほぼ水平なら、水平にそろえる
-      const pts = straightLine(d.start, n.p, g.page);
+      // 定規で引いたような直線(2点)
+      const pts = straightLine(d.start, n.p);
       const mid = { x: (pts[0]!.x + pts[1]!.x) / 2, y: (pts[0]!.y + pts[1]!.y) / 2 };
       const next = addStroke(doc.annotations, { page: pageRef(mid, g, doc), color, points: pts, width: STROKE_WIDTHS[thickness] });
       doc.annotations = next;

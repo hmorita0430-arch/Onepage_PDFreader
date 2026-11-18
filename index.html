@@ -396,6 +396,11 @@
           <button type="button" data-quick-tool="select" aria-pressed="false">✥ 選ぶ</button>
           <button id="quick-pos" type="button" class="pos-btn" aria-label="バーの位置(自動・上・下)">⇅自動</button>
         </span>
+        <span id="quick-widths" class="quick-modes quick-widths" role="group" aria-label="線の太さ" hidden>
+          <button type="button" data-quick-width="thin" aria-pressed="false">細</button>
+          <button type="button" data-quick-width="medium" aria-pressed="true">中</button>
+          <button type="button" data-quick-width="thick" aria-pressed="false">太</button>
+        </span>
         <span class="quick-colors" role="group" aria-label="色">
           <button type="button" data-quick-color="yellow" aria-label="黄" aria-pressed="true"></button>
           <button type="button" data-quick-color="green" aria-label="緑" aria-pressed="false"></button>
@@ -413,6 +418,11 @@
         <span id="sel-text" class="quick-text" role="status">●をドラッグして伸ばす・縮める。✥で動かす</span>
         <button id="sel-pos" type="button" class="pos-btn" aria-label="バーの位置(自動・上・下)">⇅自動</button>
         <button id="sel-edit" type="button" hidden>✎ 編集</button>
+        <span id="sel-widths" class="quick-modes quick-widths" role="group" aria-label="この線の太さ" hidden>
+          <button type="button" data-sel-width="thin" aria-pressed="false">細</button>
+          <button type="button" data-sel-width="medium" aria-pressed="false">中</button>
+          <button type="button" data-sel-width="thick" aria-pressed="false">太</button>
+        </span>
         <span class="quick-colors" role="group" aria-label="この蛍光ペンの色">
           <button type="button" data-sel-color="yellow" aria-label="黄" aria-pressed="false"></button>
           <button type="button" data-sel-color="green" aria-label="緑" aria-pressed="false"></button>

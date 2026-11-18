@@ -272,38 +272,41 @@ describe('Markdown: 章ごとの見出し', () => {
   });
 });
 
-import { straightLine } from '../src/model/annotations';
+import { nearestThickness, straightLine } from '../src/model/annotations';
 
 describe('straightLine(定規で引いたような直線)', () => {
-  const PG = { w: 600, h: 800 };
   it('始点と終点の、2点だけの直線になる', () => {
-    const pts = straightLine({ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }, PG);
-    expect(pts).toEqual([{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }]);
+    expect(straightLine({ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 })).toEqual([{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }]);
   });
-  it('ほぼ水平(5度以内)なら、水平にそろえる', () => {
-    // 横240・縦12(約2.9度)
-    const pts = straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.515 }, PG);
-    expect(pts[1]!.y).toBe(0.5);
-    expect(pts[1]!.x).toBe(0.5);
+  it('ほぼ水平・ほぼ垂直でも、吸い付かない(本が歪んでいて、文字の行が水平とは限らないため)', () => {
+    expect(straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.515 })[1]).toEqual({ x: 0.5, y: 0.515 });
+    expect(straightLine({ x: 0.5, y: 0.2 }, { x: 0.5 + 20 / 600, y: 0.7 })[1]).toEqual({ x: 0.5 + 20 / 600, y: 0.7 });
   });
-  it('角度は、ページの縦横の比で測る(正規化の値ではなく、見た目の角度)', () => {
-    // 正規化では dy/dx = 0.04/0.4 = 0.1(約5.7度)だが、ページが縦長(600×800)なので、見た目は横240・縦32(約7.6度)→ 水平にしない
-    expect(straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.54 }, PG)[1]!.y).toBe(0.54);
-    // 横長のページ(800×600)なら、横320・縦24(約4.3度)→ 水平にする
-    expect(straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.54 }, { w: 800, h: 600 })[1]!.y).toBe(0.5);
+  it('右から左へ、下から上へ引いても、指の位置どおり', () => {
+    expect(straightLine({ x: 0.6, y: 0.5 }, { x: 0.2, y: 0.49 })).toEqual([{ x: 0.6, y: 0.5 }, { x: 0.2, y: 0.49 }]);
   });
-  it('斜め・垂直は、そのまま', () => {
-    expect(straightLine({ x: 0.3, y: 0.2 }, { x: 0.3, y: 0.7 }, PG)[1]).toEqual({ x: 0.3, y: 0.7 });
-    expect(straightLine({ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.3 }, PG)[1]).toEqual({ x: 0.4, y: 0.3 });
-  });
-  it('右から左へ引いても、左下から右上へ引いても、水平にそろう', () => {
-    expect(straightLine({ x: 0.6, y: 0.5 }, { x: 0.2, y: 0.49 }, PG)[1]).toEqual({ x: 0.2, y: 0.5 });
-    expect(straightLine({ x: 0.2, y: 0.5 }, { x: 0.7, y: 0.488 }, PG)[1]).toEqual({ x: 0.7, y: 0.5 });
-  });
-  it('始点は、変えない(元の点を壊さない)', () => {
+  it('始点・終点は、元の点を壊さない(別の値として返す)', () => {
     const a = { x: 0.1, y: 0.5 };
-    const pts = straightLine(a, { x: 0.5, y: 0.51 }, PG);
+    const b = { x: 0.5, y: 0.6 };
+    const pts = straightLine(a, b);
     pts[0]!.x = 9;
+    pts[1]!.y = 9;
     expect(a.x).toBe(0.1);
+    expect(b.y).toBe(0.6);
+  });
+});
+
+describe('nearestThickness(線の太さを、細・中・太に当てはめる)', () => {
+  it('細・中・太の値は、そのまま', () => {
+    expect(nearestThickness(STROKE_WIDTHS.thin)).toBe('thin');
+    expect(nearestThickness(STROKE_WIDTHS.medium)).toBe('medium');
+    expect(nearestThickness(STROKE_WIDTHS.thick)).toBe('thick');
+  });
+  it('中間の値は、近い方になる', () => {
+    expect(nearestThickness(0.008)).toBe('thin');
+    expect(nearestThickness(0.01)).toBe('medium');
+    expect(nearestThickness(0.02)).toBe('thick');
+    expect(nearestThickness(0.5)).toBe('thick');
+    expect(nearestThickness(0)).toBe('thin');
   });
 });

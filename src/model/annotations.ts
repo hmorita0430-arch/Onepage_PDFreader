@@ -302,19 +302,18 @@ export function hitHighlight(a: Annotation, p: NormPoint, tol: number, page: Pag
 
 // ---- 自由線の補正 ----
 
-/** 水平とみなす角度(度)。これ以内なら、きれいな水平にする */
-export const SNAP_HORIZONTAL_DEG = 5;
-
 /**
- * 定規で引いたような、2点の直線。始点から終点まで、まっすぐ結ぶ。
- * ほぼ水平(SNAP_HORIZONTAL_DEG 以内)のときは、終点の高さを始点に合わせて、水平にする。
- * 角度は、画面の見た目(ページの縦横の大きさを掛けた値)で測る。
+ * 定規で引いたような、2点の直線。始点から終点まで、まっすぐ結ぶ(角度は、指の位置どおり)。
+ * 本が歪んでいると、文字の行も水平とは限らないため、水平・垂直への吸い付きはしない。
  */
-export function straightLine(a: NormPoint, b: NormPoint, page: PageSize, snapDeg = SNAP_HORIZONTAL_DEG): NormPoint[] {
-  const dx = (b.x - a.x) * page.w;
-  const dy = (b.y - a.y) * page.h;
-  const flat = dx !== 0 && (Math.atan2(Math.abs(dy), Math.abs(dx)) * 180) / Math.PI <= snapDeg;
-  return [{ ...a }, { x: b.x, y: flat ? a.y : b.y }];
+export function straightLine(a: NormPoint, b: NormPoint): NormPoint[] {
+  return [{ ...a }, { ...b }];
+}
+
+/** 線の太さ(正規化)に、いちばん近い、細・中・太 */
+export function nearestThickness(width: number): StrokeThickness {
+  const keys = Object.keys(STROKE_WIDTHS) as StrokeThickness[];
+  return keys.reduce((best, k) => (Math.abs(STROKE_WIDTHS[k] - width) < Math.abs(STROKE_WIDTHS[best] - width) ? k : best), keys[0]!);
 }
 
 /**
