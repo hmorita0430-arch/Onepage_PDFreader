@@ -271,3 +271,39 @@ describe('Markdown: 章ごとの見出し', () => {
     expect(md).not.toContain('###');
   });
 });
+
+import { straightLine } from '../src/model/annotations';
+
+describe('straightLine(定規で引いたような直線)', () => {
+  const PG = { w: 600, h: 800 };
+  it('始点と終点の、2点だけの直線になる', () => {
+    const pts = straightLine({ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }, PG);
+    expect(pts).toEqual([{ x: 0.1, y: 0.2 }, { x: 0.5, y: 0.6 }]);
+  });
+  it('ほぼ水平(5度以内)なら、水平にそろえる', () => {
+    // 横240・縦12(約2.9度)
+    const pts = straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.515 }, PG);
+    expect(pts[1]!.y).toBe(0.5);
+    expect(pts[1]!.x).toBe(0.5);
+  });
+  it('角度は、ページの縦横の比で測る(正規化の値ではなく、見た目の角度)', () => {
+    // 正規化では dy/dx = 0.04/0.4 = 0.1(約5.7度)だが、ページが縦長(600×800)なので、見た目は横240・縦32(約7.6度)→ 水平にしない
+    expect(straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.54 }, PG)[1]!.y).toBe(0.54);
+    // 横長のページ(800×600)なら、横320・縦24(約4.3度)→ 水平にする
+    expect(straightLine({ x: 0.1, y: 0.5 }, { x: 0.5, y: 0.54 }, { w: 800, h: 600 })[1]!.y).toBe(0.5);
+  });
+  it('斜め・垂直は、そのまま', () => {
+    expect(straightLine({ x: 0.3, y: 0.2 }, { x: 0.3, y: 0.7 }, PG)[1]).toEqual({ x: 0.3, y: 0.7 });
+    expect(straightLine({ x: 0.1, y: 0.1 }, { x: 0.4, y: 0.3 }, PG)[1]).toEqual({ x: 0.4, y: 0.3 });
+  });
+  it('右から左へ引いても、左下から右上へ引いても、水平にそろう', () => {
+    expect(straightLine({ x: 0.6, y: 0.5 }, { x: 0.2, y: 0.49 }, PG)[1]).toEqual({ x: 0.2, y: 0.5 });
+    expect(straightLine({ x: 0.2, y: 0.5 }, { x: 0.7, y: 0.488 }, PG)[1]).toEqual({ x: 0.7, y: 0.5 });
+  });
+  it('始点は、変えない(元の点を壊さない)', () => {
+    const a = { x: 0.1, y: 0.5 };
+    const pts = straightLine(a, { x: 0.5, y: 0.51 }, PG);
+    pts[0]!.x = 9;
+    expect(a.x).toBe(0.1);
+  });
+});

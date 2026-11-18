@@ -18,8 +18,8 @@ import {
   setAnnotationColor,
   setAnnotationGeometry,
   sideAt,
-  simplifyPoints,
   smoothPath,
+  straightLine,
   stretchedStroke,
   updateMemoText,
   visibleAnnotations,
@@ -74,14 +74,12 @@ const BAR_POS_KEY = 'quick-bar-pos:v1';
 type BarPos = 'auto' | 'top' | 'bottom';
 /** 長押しから蛍光ペンを選んだあと、この時間(ミリ秒)何も描かないと、通常の読書に戻る */
 export const QUICK_IDLE_MS = 8000;
-/** 点の間引きの許容(画面上のピクセル)。小さいほど元の線に忠実、大きいほどデータが小さい */
-const SIMPLIFY_PX = 1.5;
-/** これより近い点は取り込まない(画面上のピクセル) */
-const MIN_POINT_GAP_PX = 1.5;
+/** 直線として引くのに必要な長さ(画面上のピクセル)。これより短い動きは、線にしない */
+const MIN_LINE_PX = 6;
 
 const HINTS: Record<Tool, string> = {
   rect: 'ドラッグで四角く囲みます。',
-  stroke: 'なぞって線を引きます。',
+  stroke: 'ドラッグでまっすぐな線を引きます(ほぼ水平なら水平になります)。',
   memo: 'メモを置く場所をタップします。',
   erase: '消したい蛍光ペンをタップします。',
   select: '蛍光ペンをタップして選びます。●をドラッグして伸ばす・縮める、✥で動かします。',
@@ -551,8 +549,6 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
     start: NormPoint;
     sx: number;
     sy: number;
-    points: NormPoint[];
-    last: { x: number; y: number };
     moved: number;
   } | null = null;
 
@@ -574,7 +570,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
   function onDrawStart(x: number, y: number): void {
     const n = toNorm(x, y);
     if (!n || (!active && !oneShot && !selecting)) return;
-    drag = { start: n.p, sx: x, sy: y, points: [n.p], last: { x, y }, moved: 0 };
+    drag = { start: n.p, sx: x, sy: y, moved: 0 };
   }
 
   function onDrawMove(x: number, y: number): void {
@@ -594,12 +590,12 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       preview.setAttribute('class', 'hl preview');
       svg.append(preview);
     } else if (t === 'stroke') {
-      if (Math.hypot(x - drag.last.x, y - drag.last.y) < MIN_POINT_GAP_PX) return; // 細かすぎる点は取り込まない
-      drag.last = { x, y };
-      drag.points.push(n.p);
       preview?.remove();
-      // 描いている途中から、仕上がりと同じ滑らかな線で見せる
-      preview = shapeEl({ kind: 'stroke', d: smoothPath(drag.points.map((p) => ({ x: p.x * W, y: p.y * H }))), width: STROKE_WIDTHS[thickness] * W, css });
+      preview = null;
+      if (drag.moved < MIN_LINE_PX) return; // ほとんど動いていないうちは、線を出さない
+      // 定規で引くように、始点から指の位置まで、まっすぐ(ほぼ水平なら水平)の線で見せる
+      const pts = straightLine(drag.start, n.p, g.page);
+      preview = shapeEl({ kind: 'stroke', d: smoothPath(pts.map((p) => ({ x: p.x * W, y: p.y * H }))), width: STROKE_WIDTHS[thickness] * W, css });
       preview.setAttribute('class', 'hl preview');
       svg.append(preview);
     }
@@ -635,7 +631,7 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       if (!a) return 'タップで、蛍光ペン・メモを選びます';
       return a.kind === 'memo' ? '✥で動かします。「編集」で文章を直せます' : '●で伸ばす・縮める、✥で動かす';
     }
-    return (oneShot === 'rect' ? 'ドラッグで四角く囲みます' : 'なぞって線を引きます') + '(続けて引けます)';
+    return (oneShot === 'rect' ? 'ドラッグで四角く囲みます' : 'ドラッグでまっすぐな線を引きます') + '(続けて引けます)';
   }
   const quickHelp = (): string =>
     selecting
@@ -850,10 +846,10 @@ export function createAnnotator(deps: AnnotateDeps, pageEl: HTMLElement) {
       deps.commit();
       render();
       recordCreate(next[next.length - 1]!.id);
-    } else if (t === 'stroke' && d.points.length >= 2) {
-      // 手ぶれの細かい点を間引き、書き出し・同期のデータも小さくする
-      const pts = simplifyPoints([...d.points, n.p], SIMPLIFY_PX * unitsPerPx(g), g.page);
-      const mid = pts[Math.floor(pts.length / 2)]!;
+    } else if (t === 'stroke' && Math.hypot(x - d.sx, y - d.sy) >= MIN_LINE_PX) {
+      // 定規で引いたような直線(2点)。ほぼ水平なら、水平にそろえる
+      const pts = straightLine(d.start, n.p, g.page);
+      const mid = { x: (pts[0]!.x + pts[1]!.x) / 2, y: (pts[0]!.y + pts[1]!.y) / 2 };
       const next = addStroke(doc.annotations, { page: pageRef(mid, g, doc), color, points: pts, width: STROKE_WIDTHS[thickness] });
       doc.annotations = next;
       deps.commit();
